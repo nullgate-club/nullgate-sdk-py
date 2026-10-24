@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-label="nullgate">
+  <rect width="1024" height="1024" fill="#101213"/>
+  <path fill="#eff3f0" transform="translate(240.654 712.000) scale(0.393912 -0.393912)" d="M160 0H393V638C393 804 495 913 651 913C801 913 873 829 873 653V0H1106V710C1106 975 977 1117 739 1117C578 1117 457 1042 401 908H385V1095H160Z"/>
+  <rect x="644" y="744" width="96" height="32" rx="4" fill="#82b793"/>
+</svg>

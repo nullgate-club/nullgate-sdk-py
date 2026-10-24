@@ -1,0 +1,71 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "nullgate-sdk-py"
+version = "0.1.0"
+description = "Generate Akamai sensor and pixel payloads with Nullgate's typed Python SDK."
+readme = "README.md"
+requires-python = ">=3.11,<3.16"
+dependencies = ["httpx>=0.28,<1"]
+classifiers = [
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Programming Language :: Python :: 3.15",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Typing :: Typed",
+]
+
+[project.urls]
+Documentation = "https://docs.nullgate.club"
+Repository = "https://github.com/nullgate-club/nullgate-sdk-py"
+Issues = "https://github.com/nullgate-club/nullgate-sdk-py/issues"
+
+[dependency-groups]
+dev = [
+    "ruff>=0.14",
+    "mypy>=1.19",
+    "pytest>=9",
+]
+
+[tool.hatch.build]
+exclude = ["**/__pycache__", "**/*.pyc", "**/*.pyo", "**/.env", "**/.env.*"]
+
+[tool.hatch.build.targets.wheel]
+include = ["/src/nullgate/**/*.py", "/src/nullgate/py.typed"]
+sources = ["src"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "/src/nullgate/**/*.py",
+    "/src/nullgate/py.typed",
+    "/tests/**/*.py",
+    "/README.md",
+    "/assets/logo.svg",
+    "/assets/avatar.svg",
+    "/assets/avatar.png",
+    "/pyproject.toml",
+    "/uv.lock",
+    "/Makefile",
+]
+
+[tool.ruff]
+line-length = 88
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.mypy]
+strict = true
+files = ["src/nullgate"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
