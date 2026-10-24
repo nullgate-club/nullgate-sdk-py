@@ -15,7 +15,7 @@ Generate Akamai sensor and pixel payloads, with sync and async clients.
 python -m pip install nullgate-sdk-py
 ```
 
-Import as `nullgate`. Your `api_key` is the secret account UUID; the separate,
+Import as `nullgate`. Your `api_key` is the secret `ng_…` account key; the separate,
 required `uuid` selects a browser profile.
 
 ## Generate sensor data
