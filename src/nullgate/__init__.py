@@ -7,7 +7,7 @@ from uuid import UUID
 import httpx
 
 from .cookies import abck_counters, is_enough
-from .html import get_pixel_challenge
+from .html import get_pixel_challenge, get_pixel_script_url, get_sensor_script_url
 from .inputs import prepare_inputs
 
 _BASE_URL = "https://akamai.nullgate.club"
@@ -20,6 +20,8 @@ __all__ = [
     "async_open_session",
     "abck_counters",
     "get_pixel_challenge",
+    "get_pixel_script_url",
+    "get_sensor_script_url",
     "is_enough",
     "open_session",
     "prepare_inputs",

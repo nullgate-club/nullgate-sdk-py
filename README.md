@@ -20,8 +20,8 @@ required `uuid` selects a browser profile.
 
 ## Generate sensor data
 
-Fetch the page and its sensor script with your target client. Replace the example
-script URL with the one used by that page.
+Fetch the page, discover its sensor script, then fetch that script with your
+target client.
 
 ```python
 import json
@@ -30,11 +30,10 @@ import time
 from uuid import uuid4
 
 import httpx
-from nullgate import open_session
+from nullgate import get_sensor_script_url, open_session
 
 user_agent = os.environ["USER_AGENT"]
 page_url = "https://shop.example/login"
-script_url = "https://shop.example/assets/sensor.js"
 
 with (
     httpx.Client(headers={"User-Agent": user_agent}, follow_redirects=True) as target,
@@ -42,6 +41,9 @@ with (
 ):
     page = target.get(page_url)
     page.raise_for_status()
+    script_url = get_sensor_script_url(page.text, str(page.url))
+    if script_url is None:
+        raise ValueError("The page has no sensor script")
     source = target.get(script_url)
     source.raise_for_status()
     website = {"url": str(page.url), "html": page.text}
@@ -96,14 +98,17 @@ async with async_open_session(
 
 ### Pixel
 
-`pixel()` requires a page-specific `challenge` and the matching pixel script,
-not the sensor script. Within your session, with that script in `pixel_script`:
+`pixel()` requires a page-specific `challenge` and the matching pixel script:
 
 ```python
-from nullgate import get_pixel_challenge
+from nullgate import get_pixel_challenge, get_pixel_script_url
 
+pixel_url = get_pixel_script_url(website["html"], website["url"])
 challenge = get_pixel_challenge(website["html"])
-if challenge is not None:
+if pixel_url is not None and challenge is not None:
+    source = target.get(pixel_url)
+    source.raise_for_status()
+    pixel_script = {"source": str(source.url), "text": source.text}
     pixel = api.pixel(
         website=website,
         script=pixel_script,
@@ -120,6 +125,16 @@ if challenge is not None:
 Skip pixel generation when no challenge is present. Its `PixelResponse` typed
 dictionary contains `url`, `body`, `headers`, and `send_at`. Async clients expose
 both methods with the same arguments; await the result.
+
+### Script discovery
+
+`get_sensor_script_url(html, page_url)` and `get_pixel_script_url(html, page_url)`
+return absolute URLs or `None`. They resolve relative paths and `<base href>`,
+preserve query strings, and ignore modules, inactive markup and other origins.
+
+Pixel URLs match `/akam/13/<hex>`. Sensor discovery selects the unique remaining
+classic script. Multiple candidates raise `ValueError`; select the URL explicitly
+in that case. These helpers do not fetch or execute JavaScript.
 
 ## State and inputs
 
