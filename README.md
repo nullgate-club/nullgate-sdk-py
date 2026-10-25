@@ -132,9 +132,12 @@ both methods with the same arguments; await the result.
 return absolute URLs or `None`. They resolve relative paths and `<base href>`,
 preserve query strings, and ignore modules, inactive markup and other origins.
 
-Pixel URLs match `/akam/13/<hex>`. Sensor discovery selects the unique remaining
-classic script. Multiple candidates raise `ValueError`; select the URL explicitly
-in that case. These helpers do not fetch or execute JavaScript.
+Pixel URLs match `/akam/13/<hex>`. Sensor discovery skips pixel URLs and frontend
+assets ending in `.js`, `.mjs` or `.cjs`, then selects the unique remaining
+same-origin classic script. Suffix matching uses the URL path, not its query.
+Multiple candidates raise `ValueError`; select the URL explicitly in that case.
+Also provide the URL directly if your sensor uses one of those asset suffixes.
+These helpers do not fetch or execute JavaScript.
 
 ## State and inputs
 

@@ -65,11 +65,61 @@ def test_script_urls_resolve_base_entities_and_duplicates(
     )
 
 
+def test_sensor_discovery_ignores_frontend_assets() -> None:
+    sensor = "/opaque/session/collector"
+    html = f"""
+        <script src="/static/checkout/bundle.js"></script>
+        <script src="/static/catalog/bundle.js"></script>
+        <script src="{sensor}?version=2"></script>
+        <script src="/static/account/bundle.js"></script>
+        <script src="/static/navigation/bundle.js"></script>
+        <script src="/static/forms/bundle.js"></script>
+        <script src="/static/shared/bundle.js"></script>
+        <script src="/akam/13/abc"></script>
+    """
+    assert get_sensor_script_url(html, "https://shop.example/page") == (
+        f"https://shop.example{sensor}?version=2"
+    )
+    assert get_pixel_script_url(html, "https://shop.example/page") == (
+        "https://shop.example/akam/13/abc"
+    )
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "/assets/app.js",
+        "/assets/app.JS?version=2",
+        "/assets/app.mjs",
+        "/assets/app.cjs",
+        "/assets/app%2Ejs",
+    ],
+)
+def test_javascript_assets_are_not_sensor_candidates(source: str) -> None:
+    assert (
+        get_sensor_script_url(
+            f'<script src="{source}"></script>', "https://shop.example/page"
+        )
+        is None
+    )
+
+
+def test_sensor_discovery_checks_path_suffix_not_directory_or_query() -> None:
+    html = """
+        <script src="/assets/app.js?next=/collector"></script>
+        <script src="/version.js/collector?file=app.js"></script>
+    """
+    assert get_sensor_script_url(html, "https://shop.example/page") == (
+        "https://shop.example/version.js/collector?file=app.js"
+    )
+
+
 @pytest.mark.parametrize(
     ("find", "html"),
     [
         (
             get_sensor_script_url,
+            '<script src="/app.js"></script>'
             '<script src="/one"></script><script src="/two"></script>',
         ),
         (

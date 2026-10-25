@@ -79,6 +79,7 @@ def _find_script_url(html: str, page_url: str, *, pixel: bool) -> str | None:
         str(url)
         for url in _script_urls(html, page_url)
         if bool(re.fullmatch(r"/akam/13/[0-9a-fA-F]+", url.path)) == pixel
+        and (pixel or not url.path.lower().endswith((".js", ".mjs", ".cjs")))
     ]
     if len(candidates) > 1:
         kind = "pixel" if pixel else "sensor"
@@ -92,5 +93,5 @@ def get_pixel_script_url(html: str, page_url: str) -> str | None:
 
 
 def get_sensor_script_url(html: str, page_url: str) -> str | None:
-    """Find a unique same-origin non-pixel classic script; reject ambiguity."""
+    """Find a unique same-origin non-pixel script without a JS asset suffix."""
     return _find_script_url(html, page_url, pixel=False)
