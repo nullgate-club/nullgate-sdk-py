@@ -2,101 +2,166 @@
 
 # Nullgate Python SDK
 
-Typed synchronous and asynchronous clients, local protection discovery, isolated
-sessions, ready-to-send solutions, and optional failure reports.
+Typed sync and async clients, local protection discovery, document sessions and
+ready-to-send solutions. Your HTTP client owns target requests and cookies.
 
-The `next` branch requires the updated Nullgate backend, including `X-Request-ID`
-and analytics reporting. Until the backend cutover, use an updated preview
-deployment via `base_url` and `analytics_url` (the target example reads
-`NULLGATE_BASE_URL` and `ANALYTICS_URL`). Do not use this branch against the old
-production API. The existing `main` branch remains compatible with that API until
-the coordinated server upgrade.
+The `next` branch requires the updated backend, including `X-Request-ID` and
+analytics reporting. Until backend cutover, point `NULLGATE_BASE_URL` at an
+updated preview deployment. The existing `main` branch remains compatible with
+the old production API.
 
-## Install from GitHub
+## Install
 
-Python 3.11–3.15:
+Python 3.11–3.15 and Git are required. Install from public GitHub, not PyPI;
+`wreq` is the target transport used below, not an SDK dependency.
 
 ```sh
-python -m pip install "git+https://github.com/nullgate-club/nullgate-sdk-py.git@next"
+python -m pip install "git+https://github.com/nullgate-club/nullgate-sdk-py.git@next" "wreq==0.13.0"
+export NULLGATE_API_KEY='your-account-key'
+export NULLGATE_BASE_URL='https://your-preview-api.example'
+export TARGET_URL='https://your-target.example/page'
 ```
 
-Import the package as `nullgate`. This SDK is source-installed from public GitHub;
-it is not released to PyPI. Git must be available when pip installs it.
+Optional: set `NULLGATE_IDENTITY` to reuse a profile UUID; otherwise the example
+creates a fresh UUID. `ANALYTICS_URL` overrides the reporting endpoint.
+Never send your Nullgate API key to the target site.
 
-## Open a session
+## Run one generation
 
-Create the client once. Open an independent session for each document while
-reusing your identity and target cookie jar across navigation.
+Save this as `target.py` and run `python target.py`. The same script is in
+[`examples/target.py`](examples/target.py).
 
 ```python
+import asyncio
 import os
-from uuid import UUID
+from urllib.parse import urlsplit
+from uuid import uuid4
+
+from wreq import Client, Emulation, Jar, Platform, Profile, redirect
 
 from nullgate import NullgateClientAsync, Page
 from nullgate.akamai import Pixel, PixelParams, Sbsd, SbsdParams, Sensor, SensorParams
 
-async def generate(page: Page, scripts: dict[str, str], cookies: dict[str, str]):
-    async with NullgateClientAsync(
+USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36"
+)
+
+
+async def main() -> None:
+    jar = Jar()
+    target = Client(
+        emulation=Emulation(Profile.Chrome146, Platform.Windows),
+        user_agent=USER_AGENT,
+        cookie_provider=jar,
+        no_proxy=True,
+        redirect=redirect.Policy.none(),
+    )
+    client = NullgateClientAsync(
         os.environ["NULLGATE_API_KEY"],
-        base_url=os.environ["NULLGATE_BASE_URL"],
-        analytics_url=os.environ["ANALYTICS_URL"],
-    ) as client:
+        base_url=os.environ.get("NULLGATE_BASE_URL", "https://akamai.nullgate.club"),
+        analytics_url=os.environ.get("ANALYTICS_URL", "https://analytics.nullgate.club"),
+    )
+    async with target, client:
+        response = await target.get(os.environ["TARGET_URL"])
+        page = Page(url=response.url, html=await response.text())
+        protections = client.find_protections(page)
+        if not protections:
+            print(f"GET HTTP {response.status.as_int()}: no supported protection found.")
+            response.raise_for_status()
+            return
+        [protection] = protections
+        source = await target.get(protection.script_url, headers={"Referer": page.url})
+        source.raise_for_status()
+        script = await source.text()
+
+        params: PixelParams | SensorParams | SbsdParams
+        match protection:
+            case Pixel():
+                params = PixelParams(protection, script)
+            case Sensor():
+                params = SensorParams(
+                    protection,
+                    script,
+                    cookies={
+                        name: cookie.value
+                        for name in ("_abck", "bm_sz")
+                        if (cookie := jar.get(name, page.url)) is not None
+                        if not cookie.http_only
+                    },
+                )
+            case Sbsd():
+                params = SbsdParams(
+                    protection,
+                    script,
+                    cookies={
+                        name: cookie.value
+                        for name in ("bm_so", "sbsd_o", "bm_s")
+                        if (cookie := jar.get(name, page.url)) is not None
+                        if not cookie.http_only
+                    },
+                )
+
         async with client.open(
-            identity=UUID(os.environ["NULLGATE_IDENTITY"]),
-            user_agent=os.environ["USER_AGENT"],
+            identity=os.environ.get("NULLGATE_IDENTITY") or uuid4(), user_agent=USER_AGENT
         ) as session:
-            for protection in client.find_protections(page):
-                script = scripts[protection.script_url]
-                match protection:
-                    case Sensor():
-                        params = SensorParams(protection, script, cookies=cookies)
-                    case Pixel():
-                        params = PixelParams(protection, script)
-                    case Sbsd():
-                        params = SbsdParams(protection, script, cookies=cookies)
-                    case _:
-                        continue
-                yield await session.solve(params)
+            solution = await session.solve(params)
+            await solution.wait()
+            origin = urlsplit(page.url)
+            result = await target.post(
+                solution.url,
+                body=solution.body,
+                headers={
+                    "Referer": page.url,
+                    "Origin": f"{origin.scheme}://{origin.netloc}",
+                    **solution.headers,
+                },
+            )
+            print(f"POST HTTP {result.status.as_int()} request_id={solution.request_id}")
+            print(await result.text())
+            result.raise_for_status()
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
 ```
 
-`Page(url=..., html=...)` contains the page you fetched. Discovery is local: it
-does not download scripts or run the producer. Results preserve ambiguous
-candidates; select the matching protection rather than assuming the first script
-is genuine. Use `F` filters when useful, and `match` to narrow concrete types.
+`solution.wait()` respects the server's earliest send time. Send `solution.body`
+unchanged; do not JSON-encode it again. Keep the Chrome 146/Windows preset,
+User-Agent and profile identity coherent.
 
-`NullgateClient` provides the same flow synchronously with `with`; its methods,
-solutions and sessions do not require `await`.
+The example reads only the named, non-HttpOnly cookies exposed by native
+`Jar.get(name, page.url)`, not a full browser cookie capture. In wreq 0.13 that
+getter matches domains exactly, so it can omit parent-domain cookies even when
+the target transport sends them. It does not reconstruct cookie scope.
 
-## Send a solution
+One POST is one generation, not proof of clearance. If the target requires more
+sensor generations, keep the session and target jar, pass the current cookie
+values and solve again. For blocking SBSD, fetch the original page again and
+check the result. A new document needs a new session; reuse the identity and jar.
 
-A solution contains `method`, `url`, `headers`, exact string `body`, absolute Unix
-`send_at`, and the server's `request_id`. Await `solution.wait()`, then send the
-body unchanged with your target HTTP client. Do not JSON-encode it again.
+## Discovery
 
-Your target client owns transport settings, redirects and cookies. Never send
-your Nullgate API key to the target site. The SDK's HTTPX connection is for the
-Nullgate API, not a browser impersonation transport.
+`Page(url=..., html=...)` contains the document you fetched. Both client methods
+and `nullgate.html.find_protections` are synchronous and local: they do not fetch
+scripts or execute JavaScript. Sensor detection is a same-origin extensionless
+classic-script heuristic; the service validates the source you supply.
 
-[The complete example](examples/target.py) uses Python `wreq==0.13.0` with Chrome
-146/Windows, scoped script-visible cookie observations and a persistent target
-cookie jar:
+Discovery returns a list: no candidates gives `[]`, one gives a single-element
+list. More than one raises `AmbiguousProtectionError`, a `ValueError` exported
+from `nullgate`. Filtering runs before that check:
 
-```sh
-python -m pip install wreq==0.13.0
-export NULLGATE_API_KEY='your-account-key'
-export NULLGATE_IDENTITY='your-persistent-profile-uuid'
-export TARGET_URL='https://your-target.example/page'
-python examples/target.py
+```python
+from nullgate import F
+
+protections = client.find_protections(page, where=F.kind == "sensor")
+candidates = client.find_protections(page, panic=False)
 ```
 
-Optional environment variables are `TARGET_PROXY`, `NULLGATE_BASE_URL` and
-`ANALYTICS_URL`. `REPORT_FAILURES=1` enables best-effort reports for observed
-failures in the example. No credentials or target captures are bundled.
-
-Keep the transport preset, User-Agent and generated identity coherent. A client
-preset does not change the network stack of your proxy exit or guarantee target
-access. A sensor submission ceiling is not clearance. A successful SBSD POST is
-not blocking clearance: re-fetch the original page and check its actual result.
+`panic=False` retains every candidate in document order, including duplicate
+occurrences and their provenance. It never picks or deduplicates for you. Use an
+explicit filter to select a candidate, and `match` to narrow its concrete type.
+`NullgateClient` offers the same flow synchronously with `with` and no `await`.
 
 ## Errors and reports
 
@@ -104,12 +169,11 @@ not blocking clearance: re-fetch the original page and check its actual result.
 HTTPX request/response. Transport and malformed-response errors remain distinct.
 
 After an actual target failure, call `await solution.report()` or
-`await client.report(request_id)`. In sync code omit `await`. Reporting sends only
+`await client.report(request_id)`; omit `await` in sync code. Reports send only
 the request ID to analytics, without account authorization or target cookies.
-It does not retry or refund the operation. `True` means HTTP delivery succeeded,
-not that a report was accepted: repeated, unknown, expired and rate-limited IDs
-receive the same quiet acknowledgement. Network failures return `False`;
-cancellation and local programming errors are not swallowed.
+They do not retry or refund generation. `True` means HTTP delivery succeeded,
+not report acceptance; network failures return `False`. Cancellation and local
+programming errors propagate.
 
 ## Develop
 
@@ -120,8 +184,7 @@ make check
 make build
 ```
 
-The gate checks formatting, typing and behavioral tests, including type-checking
-the target example; `make build` produces local distribution archives without
-publishing. CI runs `make setup`, `make check` and `make build` on Python 3.11 and
-3.15. Canonical SDK-first documentation is at
-[docs.nullgate.club](https://docs.nullgate.club).
+The gate checks formatting, typing and behavior, including the target example.
+CI runs `make setup`, `make check` and `make build` on Python 3.11 and 3.15.
+Builds produce local archives without publishing. More SDK documentation is at
+[Quickstart](https://docs.nullgate.club/en/quickstart).

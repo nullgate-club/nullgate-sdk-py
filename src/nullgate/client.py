@@ -225,9 +225,9 @@ class NullgateClient:
         return NullgateSession(self, identity, user_agent, timezone)
 
     def find_protections(
-        self, page: Page, where: MagicFilter | None = None
+        self, page: Page, where: MagicFilter | None = None, *, panic: bool = True
     ) -> list[Protection]:
-        return find_protections(page, where)
+        return find_protections(page, where, panic=panic)
 
     def report(self, request_id: str) -> bool:
         """Best-effort HTTP delivery; a 2xx does not prove archive acceptance."""
@@ -292,9 +292,9 @@ class NullgateClientAsync:
         return NullgateSessionAsync(self, identity, user_agent, timezone)
 
     def find_protections(
-        self, page: Page, where: MagicFilter | None = None
+        self, page: Page, where: MagicFilter | None = None, *, panic: bool = True
     ) -> list[Protection]:
-        return find_protections(page, where)
+        return find_protections(page, where, panic=panic)
 
     async def report(self, request_id: str) -> bool:
         """Best-effort HTTP delivery; cancellation and programming errors propagate."""

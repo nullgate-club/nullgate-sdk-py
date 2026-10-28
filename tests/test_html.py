@@ -4,8 +4,15 @@ from typing import cast
 import pytest
 from magic_filter import MagicFilter
 
-from nullgate import F, NullgateClient, NullgateClientAsync, Page
+from nullgate import (
+    AmbiguousProtectionError,
+    F,
+    NullgateClient,
+    NullgateClientAsync,
+    Page,
+)
 from nullgate.akamai import Pixel, Sbsd, Sensor
+from nullgate.html import find_protections
 
 VERSION = "11111111-2222-4333-8444-555555555555"
 
@@ -28,7 +35,9 @@ def test_local_discovery_retains_page_occurrences_and_provenance(
         NullgateClientAsync("not-used") if asynchronous else NullgateClient("not-used")
     )
     # Both clients discover synchronously; no network client needs to be opened.
-    found = client.find_protections(page)
+    with pytest.raises(AmbiguousProtectionError, match="panic=False"):
+        client.find_protections(page)
+    found = client.find_protections(page, panic=False)
     if isinstance(client, NullgateClientAsync):
         asyncio.run(client.aclose())
     else:
@@ -99,7 +108,7 @@ def test_discovery_exposes_ambiguity_instead_of_picking_a_script_or_challenge() 
         '<script src="/first"></script><script src="/second"></script>',
     )
     with NullgateClient("not-used") as client:
-        found = client.find_protections(page)
+        found = client.find_protections(page, panic=False)
     assert [
         (item.script_url, item.challenge) for item in found if isinstance(item, Pixel)
     ] == [
@@ -173,6 +182,39 @@ def test_magic_filter_only_resolves_each_concrete_protection() -> None:
         assert client.find_protections(page, where=F.provider == "turnstile") == []
         with pytest.raises(TypeError):
             client.find_protections(page, where=cast(MagicFilter, lambda item: True))
+        with pytest.raises(AmbiguousProtectionError):
+            client.find_protections(page, where=F.kind == "sbsd")
+
+
+def test_local_discovery_keeps_empty_and_single_results_as_lists() -> None:
+    assert find_protections(Page("https://target.example/", "")) == []
+    page = Page("https://target.example/", '<script src="/sensor"></script>')
+    found = find_protections(page)
+    assert [item.script_url for item in found] == ["https://target.example/sensor"]
+    assert found[0].page is page
+
+
+def test_local_discovery_checks_filtered_candidates_without_deduplicating() -> None:
+    page = Page(
+        "https://target.example/",
+        '<script src="/sensor"></script><script src="/sensor"></script>'
+        f'<script src="/sbsd?v={VERSION}"></script>',
+    )
+    with pytest.raises(AmbiguousProtectionError, match="3 protection candidates"):
+        find_protections(page)
+    with pytest.raises(AmbiguousProtectionError):
+        find_protections(page, where=F.kind == "sensor")
+    assert [
+        item.script_url for item in find_protections(page, where=F.kind == "sbsd")
+    ] == [f"https://target.example/sbsd?v={VERSION}"]
+    assert find_protections(page, where=F.kind == "pixel") == []
+    found = find_protections(page, where=F.kind == "sensor", panic=False)
+    assert [item.script_url for item in found] == [
+        "https://target.example/sensor",
+        "https://target.example/sensor",
+    ]
+    assert found[0] is not found[1]
+    assert found[0].provenance != found[1].provenance
 
 
 @pytest.mark.parametrize(

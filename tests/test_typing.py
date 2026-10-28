@@ -30,4 +30,4 @@ def test_mismatched_params_untyped_discovery_filters_and_raw_protections_are_rej
     )
     assert result.returncode == 1, result.stdout + result.stderr
     codes = Counter(re.findall(r"\[([a-z-]+)\]$", result.stdout, re.MULTILINE))
-    assert codes == {"arg-type": 6, "call-overload": 2}, result.stdout + result.stderr
+    assert codes == {"arg-type": 9, "call-overload": 2}, result.stdout + result.stderr

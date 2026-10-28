@@ -8,6 +8,7 @@ from nullgate import (
     Page,
 )
 from nullgate.akamai import Pixel, PixelParams, Sbsd, SbsdParams, Sensor, SensorParams
+from nullgate.html import find_protections
 
 
 def wrong_pairings(pixel: Pixel, sensor: Sensor, sbsd: Sbsd) -> None:
@@ -22,6 +23,8 @@ def wrong_sync(
 ) -> None:
     session.solve(pixel)
     client.find_protections(page, where=lambda item: True)
+    client.find_protections(page, panic="false")
+    find_protections(page, panic="false")
 
 
 async def wrong_async(
@@ -29,3 +32,4 @@ async def wrong_async(
 ) -> None:
     await session.solve(pixel)
     client.find_protections(page, where=lambda item: True)
+    client.find_protections(page, panic="false")

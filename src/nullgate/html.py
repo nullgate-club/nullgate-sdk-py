@@ -15,6 +15,10 @@ _PIXEL_CHALLENGE = re.compile(r"""\bbazadebezolkohpepadr\s*=\s*(['"])([0-9]+)\1"
 _PIXEL_PATH = re.compile(r"/akam/13/[0-9a-fA-F]+")
 
 
+class AmbiguousProtectionError(ValueError):
+    """More than one protection candidate remains after local filtering."""
+
+
 class _Scripts(HTMLParser):
     def __init__(self, html: str) -> None:
         super().__init__()
@@ -76,8 +80,10 @@ def _is_uuid(value: str) -> bool:
         return False
 
 
-def find_protections(page: Page, where: MagicFilter | None = None) -> list[Protection]:
-    """Retain candidate occurrences and ambiguous challenges in document order.
+def find_protections(
+    page: Page, where: MagicFilter | None = None, *, panic: bool = True
+) -> list[Protection]:
+    """Discover candidates, raising on ambiguity unless panic=False.
 
     Sensor discovery uses the existing same-origin extensionless classic-script
     heuristic. It does not prove a script's contents; the service validates the
@@ -133,5 +139,10 @@ def find_protections(page: Page, where: MagicFilter | None = None) -> list[Prote
         if source.path and not source.path.lower().endswith((".js", ".mjs", ".cjs")):
             found.append(Sensor(page, script_url, provenance=reference))
     if where is not None:
-        return [item for item in found if bool(where.resolve(item))]
+        found = [item for item in found if bool(where.resolve(item))]
+    if panic and len(found) > 1:
+        raise AmbiguousProtectionError(
+            f"Found {len(found)} protection candidates; use where to select one "
+            "or panic=False to inspect all candidates."
+        )
     return found

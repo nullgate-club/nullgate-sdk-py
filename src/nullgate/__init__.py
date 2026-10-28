@@ -10,10 +10,12 @@ from .client import (
     NullgateSession,
     NullgateSessionAsync,
 )
+from .html import AmbiguousProtectionError
 from .models import Page, ScriptReference
 from .solution import Solution, SolutionAsync
 
 __all__ = [
+    "AmbiguousProtectionError",
     "F",
     "NullgateAPIError",
     "NullgateClient",
