@@ -1,6 +1,6 @@
 import pytest
 
-from nullgate import abck_counters, is_enough
+from nullgate.akamai import abck_counters, is_enough
 
 
 @pytest.mark.parametrize(

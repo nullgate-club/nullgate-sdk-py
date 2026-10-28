@@ -1,199 +1,289 @@
 import asyncio
-from collections.abc import Callable
-from http.cookies import SimpleCookie
+import json
+from concurrent.futures import ThreadPoolExecutor
+from threading import Barrier, Lock
 from uuid import UUID
 
 import httpx
 import pytest
 
-from nullgate import AsyncSession, Session, async_open_session, open_session
+from nullgate import NullgateClient, NullgateClientAsync, Page
+from nullgate.akamai import Sensor, SensorParams
+
+IDENTITY_A = UUID(int=1)
+IDENTITY_B = UUID(int=2)
+SENSOR = Sensor(
+    Page("https://target.example/document", "<html></html>"),
+    "https://target.example/collector",
+)
+PARAMS = SensorParams(SENSOR, "caller-fetched-source")
 
 
-@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
-def test_continuation_rotation_cookies_and_context_isolation(
-    asynchronous: bool,
-) -> None:
-    seen: list[tuple[str | None, dict[str, str], str | None]] = []
-    responses = iter(
-        [
-            httpx.Response(
-                200,
-                headers={
-                    "X-State-ID": "first",
-                    "Set-Cookie": "server=present; Path=/",
-                },
-            ),
-            httpx.Response(200, headers={"X-State-ID": "rotated"}),
-            httpx.Response(200),
-            httpx.Response(200),
-            httpx.Response(200, headers={"X-State-ID": "separate"}),
-        ]
+class ClosingTransport(httpx.MockTransport):
+    closes = 0
+
+    def close(self) -> None:
+        self.closes += 1
+
+    async def aclose(self) -> None:
+        self.closes += 1
+
+
+def generated(request: httpx.Request, state: str) -> httpx.Response:
+    return httpx.Response(
+        200,
+        json={
+            "sensor_data": "generated-sensor",
+            "headers": {"Content-Type": "application/json"},
+            "send_at": 0.0,
+        },
+        headers={"X-State-ID": state, "X-Request-ID": "1" * 32},
     )
 
-    def handle(request: httpx.Request) -> httpx.Response:
-        cookies: SimpleCookie[str] = SimpleCookie(request.headers.get("Cookie", ""))
-        seen.append(
-            (
-                request.headers.get("X-State-ID"),
-                {key: value.value for key, value in cookies.items()},
-                request.headers.get("Authorization"),
-            )
-        )
-        return next(responses)
-
-    transport = httpx.MockTransport(handle)
-    headers = {"Authorization": "Bearer caller", "X-State-ID": "ignored"}
-    uuid = UUID("a07aad50-f262-40b1-b187-11532c054bc0")
-
-    def run_sync() -> None:
-        with open_session(
-            "https://nullgate.test", uuid=uuid, headers=headers, transport=transport
-        ) as client:
-            assert seen == []
-            client.cookies.set("caller", "kept")
-            for _ in range(4):
-                client.get("/step").raise_for_status()
-        assert client.is_closed
-        with pytest.raises(RuntimeError, match="closed"):
-            client.get("/step")
-        with open_session(
-            "https://nullgate.test", uuid=uuid, headers=headers, transport=transport
-        ) as other:
-            other.get("/step").raise_for_status()
-        assert other.is_closed
-
-    async def run_async() -> None:
-        async with async_open_session(
-            "https://nullgate.test", uuid=uuid, headers=headers, transport=transport
-        ) as client:
-            assert seen == []
-            client.cookies.set("caller", "kept")
-            for _ in range(4):
-                response = await client.get("/step")
-                response.raise_for_status()
-        assert client.is_closed
-        with pytest.raises(RuntimeError, match="closed"):
-            await client.get("/step")
-        async with async_open_session(
-            "https://nullgate.test", uuid=uuid, headers=headers, transport=transport
-        ) as other:
-            response = await other.get("/step")
-            response.raise_for_status()
-        assert other.is_closed
-
-    if asynchronous:
-        asyncio.run(run_async())
-    else:
-        run_sync()
-
-    assert seen == [
-        (None, {"caller": "kept"}, "Bearer caller"),
-        ("first", {"caller": "kept", "server": "present"}, "Bearer caller"),
-        ("rotated", {"caller": "kept", "server": "present"}, "Bearer caller"),
-        ("rotated", {"caller": "kept", "server": "present"}, "Bearer caller"),
-        (None, {}, "Bearer caller"),
-    ]
-
-
-@pytest.mark.parametrize(
-    "constructor", [Session, AsyncSession, open_session, async_open_session]
-)
-def test_uuid_is_required_and_invalid_uuid_is_rejected(
-    constructor: Callable[..., object],
-) -> None:
-    args = () if constructor in (Session, AsyncSession) else ("https://nullgate.test",)
-    with pytest.raises(TypeError, match="uuid"):
-        constructor(*args)
-    for invalid in ("not-a-uuid", "", "../other"):
-        with pytest.raises(ValueError):
-            constructor(*args, uuid=invalid)
-
 
 @pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
-def test_direct_constructor_normalizes_uuid_and_preserves_native_auth(
+def test_sessions_keep_identity_headers_timezone_and_lifetime_separate(
     asynchronous: bool,
 ) -> None:
-    identity = UUID("a07aad50-f262-40b1-b187-11532c054bc0")
+    seen: list[httpx.Request] = []
 
     def handle(request: httpx.Request) -> httpx.Response:
-        assert request.headers["Authorization"] == "Basic dXNlcjpwYXNz"
-        assert "X-State-ID" not in request.headers
-        return httpx.Response(204)
+        seen.append(request)
+        return generated(request, f"{request.headers['User-Agent']}-state")
 
-    transport = httpx.MockTransport(handle)
+    transport = ClosingTransport(handle)
 
     def run_sync() -> None:
-        with Session(
-            uuid=identity.hex.upper(),
-            base_url="https://nullgate.test",
-            auth=("user", "pass"),
-            transport=transport,
-        ) as client:
-            assert client.uuid == identity
-            client.get("/step").raise_for_status()
-        assert client.is_closed
+        client = NullgateClient(
+            "shared-secret", base_url="https://api.example", transport=transport
+        )
+        with client:
+            first = client.open(
+                identity=IDENTITY_A, user_agent="UA-A", timezone="Europe/Paris"
+            )
+            with client.open(identity=str(IDENTITY_B), user_agent="UA-B") as second:
+                with first:
+                    first.solve(PARAMS)
+                    second.solve(PARAMS)
+                    first.solve(PARAMS)
+                assert first.is_closed and not second.is_closed and not client.is_closed
+                with pytest.raises(RuntimeError):
+                    first.solve(PARAMS)
+                second.solve(PARAMS)
+            assert second.is_closed and transport.closes == 0
+            with client.open(identity=IDENTITY_A, user_agent="UA-A") as fresh:
+                fresh.solve(PARAMS)
+        assert client.is_closed and transport.closes == 1
+        client.close()
+        assert transport.closes == 1
+        with pytest.raises(RuntimeError):
+            client.open(identity=IDENTITY_A, user_agent="UA-A")
 
     async def run_async() -> None:
-        async with AsyncSession(
-            uuid=identity.hex.upper(),
-            base_url="https://nullgate.test",
-            auth=("user", "pass"),
-            transport=transport,
-        ) as client:
-            assert client.uuid == identity
-            response = await client.get("/step")
-            response.raise_for_status()
-        assert client.is_closed
+        client = NullgateClientAsync(
+            "shared-secret", base_url="https://api.example", transport=transport
+        )
+        async with client:
+            first = client.open(
+                identity=IDENTITY_A, user_agent="UA-A", timezone="Europe/Paris"
+            )
+            async with client.open(
+                identity=str(IDENTITY_B), user_agent="UA-B"
+            ) as second:
+                async with first:
+                    await first.solve(PARAMS)
+                    await second.solve(PARAMS)
+                    await first.solve(PARAMS)
+                assert first.is_closed and not second.is_closed and not client.is_closed
+                with pytest.raises(RuntimeError):
+                    await first.solve(PARAMS)
+                await second.solve(PARAMS)
+            assert second.is_closed and transport.closes == 0
+            async with client.open(identity=IDENTITY_A, user_agent="UA-A") as fresh:
+                await fresh.solve(PARAMS)
+        assert client.is_closed and transport.closes == 1
+        await client.aclose()
+        assert transport.closes == 1
+        with pytest.raises(RuntimeError):
+            client.open(identity=IDENTITY_A, user_agent="UA-A")
 
-    if asynchronous:
-        asyncio.run(run_async())
-    else:
-        run_sync()
+    asyncio.run(run_async()) if asynchronous else run_sync()
+    assert [request.headers.get("X-State-ID") for request in seen] == [
+        None,
+        None,
+        "UA-A-state",
+        "UA-B-state",
+        None,
+    ]
+    assert [request.headers["User-Agent"] for request in seen] == [
+        "UA-A",
+        "UA-B",
+        "UA-A",
+        "UA-B",
+        "UA-A",
+    ]
+    assert [request.url.path for request in seen] == [
+        f"/v1/{identity}/generate"
+        for identity in (IDENTITY_A, IDENTITY_B, IDENTITY_A, IDENTITY_B, IDENTITY_A)
+    ]
+    assert [json.loads(request.content).get("timezone") for request in seen] == [
+        "Europe/Paris",
+        None,
+        "Europe/Paris",
+        None,
+        None,
+    ]
 
 
 @pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
-@pytest.mark.parametrize("stateful", [False, True], ids=["direct", "factory"])
-def test_explicit_api_key_overrides_only_authorization_and_preserves_httpx_options(
-    asynchronous: bool, stateful: bool
+def test_client_owns_transport_while_sessions_close_independently(
+    asynchronous: bool,
 ) -> None:
-    api_key = str(UUID("11111111-1111-4111-8111-111111111111"))
-    seen: list[tuple[str, str | None]] = []
-    headers = {"Authorization": "Bearer old", "X-Custom": "preserved"}
+    transport = ClosingTransport(lambda request: generated(request, "state"))
 
-    def handle(request: httpx.Request) -> httpx.Response:
-        assert request.headers["X-Custom"] == "preserved"
-        assert request.headers["Cookie"] == "caller=kept"
-        seen.append(
-            (request.headers["Authorization"], request.headers.get("X-State-ID"))
-        )
-        return httpx.Response(200, headers={"X-State-ID": "next"})
-
-    kwargs = {
-        "base_url": "https://nullgate.test",
-        "uuid": UUID("a07aad50-f262-40b1-b187-11532c054bc0"),
-        "api_key": api_key,
-        "headers": headers,
-        "cookies": {"caller": "kept"},
-        "transport": httpx.MockTransport(handle),
-    }
+    def run_sync() -> None:
+        client = NullgateClient("secret", transport=transport)
+        session = client.open(identity=IDENTITY_A, user_agent="UA")
+        client.close()
+        assert session.is_closed
+        with pytest.raises(RuntimeError):
+            session.solve(PARAMS)
+        session.close()
 
     async def run_async() -> None:
-        constructor = async_open_session if stateful else AsyncSession
-        async with constructor(**kwargs) as client:
-            for _ in range(2):
-                response = await client.get("/step")
-                response.raise_for_status()
+        client = NullgateClientAsync("secret", transport=transport)
+        session = client.open(identity=IDENTITY_A, user_agent="UA")
+        await client.aclose()
+        assert session.is_closed
+        with pytest.raises(RuntimeError):
+            await session.solve(PARAMS)
+        await session.aclose()
 
-    if asynchronous:
-        asyncio.run(run_async())
-    else:
-        constructor = open_session if stateful else Session
-        with constructor(**kwargs) as client:
-            for _ in range(2):
-                client.get("/step").raise_for_status()
+    asyncio.run(run_async()) if asynchronous else run_sync()
+    assert transport.closes == 1
 
-    assert seen == [
-        (f"Bearer {api_key}", None),
-        (f"Bearer {api_key}", "next" if stateful else None),
-    ]
-    assert headers["Authorization"] == "Bearer old"
+
+def test_sync_sessions_overlap_independently_and_serialize_their_own_requests() -> None:
+    barrier = Barrier(2, timeout=5)
+    record_lock = Lock()
+    states: dict[str, list[str | None]] = {"UA-A": [], "UA-B": []}
+    active: set[str] = set()
+    overlap: list[bool] = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        user_agent = request.headers["User-Agent"]
+        with record_lock:
+            assert user_agent not in active
+            active.add(user_agent)
+            states[user_agent].append(request.headers.get("X-State-ID"))
+            count = len(states[user_agent])
+        if count == 1:
+            barrier.wait()
+            with record_lock:
+                overlap.append(len(active) == 2)
+        with record_lock:
+            active.remove(user_agent)
+        return generated(request, f"{user_agent}-{count}")
+
+    with NullgateClient("secret", transport=httpx.MockTransport(handle)) as client:
+        with (
+            client.open(identity=IDENTITY_A, user_agent="UA-A") as first,
+            client.open(identity=IDENTITY_B, user_agent="UA-B") as second,
+        ):
+            with ThreadPoolExecutor(max_workers=3) as executor:
+                futures = [
+                    executor.submit(first.solve, PARAMS),
+                    executor.submit(first.solve, PARAMS),
+                    executor.submit(second.solve, PARAMS),
+                ]
+                for future in futures:
+                    future.result(timeout=10)
+    assert any(overlap)
+    assert states == {"UA-A": [None, "UA-A-1"], "UA-B": [None]}
+
+
+def test_async_sessions_overlap_independently_and_serialize_their_own_requests() -> (
+    None
+):
+    async def scenario() -> None:
+        active: set[str] = set()
+        overlap: list[bool] = []
+        states: dict[str, list[str | None]] = {"UA-A": [], "UA-B": []}
+
+        async def handle(request: httpx.Request) -> httpx.Response:
+            user_agent = request.headers["User-Agent"]
+            assert user_agent not in active
+            active.add(user_agent)
+            states[user_agent].append(request.headers.get("X-State-ID"))
+            count = len(states[user_agent])
+            await asyncio.sleep(0)
+            overlap.append(len(active) == 2)
+            active.remove(user_agent)
+            return generated(request, f"{user_agent}-{count}")
+
+        async with NullgateClientAsync(
+            "secret", transport=httpx.MockTransport(handle)
+        ) as client:
+            async with (
+                client.open(identity=IDENTITY_A, user_agent="UA-A") as first,
+                client.open(identity=IDENTITY_B, user_agent="UA-B") as second,
+            ):
+                await asyncio.gather(
+                    first.solve(PARAMS), first.solve(PARAMS), second.solve(PARAMS)
+                )
+        assert any(overlap)
+        assert states == {"UA-A": [None, "UA-A-1"], "UA-B": [None]}
+
+    asyncio.run(scenario())
+
+
+def test_explicit_target_transport_and_cookie_jar_stay_caller_owned() -> None:
+    target_requests: list[httpx.Request] = []
+
+    def target_handle(request: httpx.Request) -> httpx.Response:
+        target_requests.append(request)
+        assert (
+            "Authorization" not in request.headers
+            and "X-State-ID" not in request.headers
+        )
+        assert request.headers["Cookie"] == "target=caller-owned"
+        if request.method == "GET":
+            return httpx.Response(200, text="caller-fetched-source")
+        assert json.loads(request.content) == {"sensor_data": "generated-sensor"}
+        return httpx.Response(200, headers={"Set-Cookie": "accepted=caller-observed"})
+
+    with httpx.Client(
+        cookies={"target": "caller-owned"}, transport=httpx.MockTransport(target_handle)
+    ) as target:
+        source = target.get(SENSOR.script_url)
+        with NullgateClient(
+            "secret",
+            transport=httpx.MockTransport(lambda request: generated(request, "state")),
+        ) as client:
+            with client.open(identity=IDENTITY_A, user_agent="UA") as session:
+                solution = session.solve(SensorParams(SENSOR, source.text))
+            target.request(
+                solution.method,
+                solution.url,
+                headers=solution.headers,
+                content=solution.body,
+            )
+        assert not target.is_closed and target.cookies["accepted"] == "caller-observed"
+    assert [request.method for request in target_requests] == ["GET", "POST"]
+
+
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+def test_invalid_identity_is_rejected_before_request_allocation(
+    asynchronous: bool,
+) -> None:
+    def run_sync() -> None:
+        with NullgateClient("secret") as client:
+            with pytest.raises(ValueError):
+                client.open(identity="not-a-uuid", user_agent="UA")
+
+    async def run_async() -> None:
+        async with NullgateClientAsync("secret") as client:
+            with pytest.raises(ValueError):
+                client.open(identity="not-a-uuid", user_agent="UA")
+
+    asyncio.run(run_async()) if asynchronous else run_sync()

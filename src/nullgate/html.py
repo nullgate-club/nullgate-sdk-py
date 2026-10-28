@@ -1,97 +1,137 @@
-"""Find Akamai resources in caller-supplied HTML."""
+"""Discover supported protection candidates without fetching or executing sources."""
 
 import re
 from html.parser import HTMLParser
 from urllib.parse import urlsplit
+from uuid import UUID
 
 import httpx
+from magic_filter import MagicFilter
 
-PIXEL_CHALLENGE_PATTERN = re.compile(
-    r"""\bbazadebezolkohpepadr\s*=\s*(['"])([0-9]+)\1"""
-)
+from .akamai import Pixel, Protection, Sbsd, Sensor
+from .models import Page, ScriptReference
 
-
-def get_pixel_challenge(html: str) -> str | None:
-    """Find a quoted numeric challenge assignment anywhere in the supplied HTML."""
-    match = PIXEL_CHALLENGE_PATTERN.search(html)
-    return match.group(2) if match else None
+_PIXEL_CHALLENGE = re.compile(r"""\bbazadebezolkohpepadr\s*=\s*(['"])([0-9]+)\1""")
+_PIXEL_PATH = re.compile(r"/akam/13/[0-9a-fA-F]+")
 
 
-class _ScriptParser(HTMLParser):
-    def __init__(self) -> None:
+class _Scripts(HTMLParser):
+    def __init__(self, html: str) -> None:
         super().__init__()
         self.base: str | None = None
-        self.sources: list[str] = []
+        self.sources: list[ScriptReference] = []
+        self.challenges: dict[str, int] = {}
         self._inert: list[str] = []
+        self._inline = False
+        self._script_index = 0
+        self._line_offsets = [0, *(match.end() for match in re.finditer("\n", html))]
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        index = self._script_index
+        if tag == "script":
+            self._script_index += 1
         if tag in {"template", "noscript"}:
             self._inert.append(tag)
-            return
         if self._inert:
             return
         attributes = dict(reversed(attrs))
         if tag == "base" and self.base is None and "href" in attributes:
             self.base = (attributes["href"] or "").strip()
-        if tag != "script" or "nomodule" in attributes:
+        if tag != "script":
             return
         script_type = (attributes.get("type") or "").strip().lower()
-        if script_type in {"", "text/javascript", "application/javascript"}:
-            source = (attributes.get("src") or "").strip()
-            if source:
-                self.sources.append(source)
+        self._inline = "nomodule" not in attributes and script_type in {
+            "",
+            "text/javascript",
+            "application/javascript",
+        }
+        if not self._inline:
+            return
+        source = (attributes.get("src") or "").strip()
+        if source:
+            line, column = self.getpos()
+            self.sources.append(ScriptReference(source, index, line, column))
+        if "src" in attributes:
+            self._inline = False
+
+    def handle_data(self, data: str) -> None:
+        if self._inert or not self._inline:
+            return
+        line, column = self.getpos()
+        offset = self._line_offsets[line - 1] + column
+        for match in _PIXEL_CHALLENGE.finditer(data):
+            self.challenges.setdefault(match[2], offset + match.start())
 
     def handle_endtag(self, tag: str) -> None:
+        if tag == "script":
+            self._inline = False
         if self._inert and self._inert[-1] == tag:
             self._inert.pop()
 
 
-def _script_urls(html: str, page_url: str) -> list[httpx.URL]:
-    # Reject malformed authorities before HTTPX normalizes them.
-    urlsplit(page_url)
-    page = httpx.URL(page_url)
-    if page.scheme not in {"http", "https"} or not page.host:
-        raise ValueError("page_url must be an absolute HTTP(S) URL")
-    parser = _ScriptParser()
-    parser.feed(html)
+def _is_uuid(value: str) -> bool:
+    try:
+        return len(value) == 36 and str(UUID(value)) == value.lower()
+    except ValueError:
+        return False
+
+
+def find_protections(page: Page, where: MagicFilter | None = None) -> list[Protection]:
+    """Retain candidate occurrences and ambiguous challenges in document order.
+
+    Sensor discovery uses the existing same-origin extensionless classic-script
+    heuristic. It does not prove a script's contents; the service validates the
+    caller-supplied source. Unknown JS assets and other providers are not solvers.
+    """
+    if where is not None and not isinstance(where, MagicFilter):
+        raise TypeError("where must be a MagicFilter expression")
+    document = httpx.URL(page.url)
+    parser = _Scripts(page.html)
+    parser.feed(page.html)
     try:
         urlsplit(parser.base or "")
-        base = page.join(parser.base or "")
+        base = document.join(parser.base or "")
     except (ValueError, httpx.InvalidURL):
-        base = page
+        base = document
     if base.scheme not in {"http", "https"}:
-        base = page
-    urls: list[httpx.URL] = []
-    for source in parser.sources:
+        base = document
+    found: list[Protection] = []
+    for reference in parser.sources:
         try:
-            urlsplit(source)
-            url = base.join(source).copy_with(fragment=None)
+            urlsplit(reference.raw_source)
+            source = base.join(reference.raw_source).copy_with(fragment=None)
         except (ValueError, httpx.InvalidURL):
             continue
-        if (url.scheme, url.host, url.port) == (page.scheme, page.host, page.port):
-            if url not in urls:
-                urls.append(url)
-    return urls
-
-
-def _find_script_url(html: str, page_url: str, *, pixel: bool) -> str | None:
-    candidates = [
-        str(url)
-        for url in _script_urls(html, page_url)
-        if bool(re.fullmatch(r"/akam/13/[0-9a-fA-F]+", url.path)) == pixel
-        and (pixel or not url.path.lower().endswith((".js", ".mjs", ".cjs")))
-    ]
-    if len(candidates) > 1:
-        kind = "pixel" if pixel else "sensor"
-        raise ValueError(f"Multiple {kind} script candidates; select a URL explicitly")
-    return candidates[0] if candidates else None
-
-
-def get_pixel_script_url(html: str, page_url: str) -> str | None:
-    """Find the page's same-origin /akam/13/<hex> classic script."""
-    return _find_script_url(html, page_url, pixel=True)
-
-
-def get_sensor_script_url(html: str, page_url: str) -> str | None:
-    """Find a unique same-origin non-pixel script without a JS asset suffix."""
-    return _find_script_url(html, page_url, pixel=False)
+        if (source.scheme, source.host, source.port) != (
+            document.scheme,
+            document.host,
+            document.port,
+        ):
+            continue
+        script_url = str(source)
+        if _PIXEL_PATH.fullmatch(source.path):
+            for challenge, offset in parser.challenges.items():
+                found.append(
+                    Pixel(
+                        page,
+                        script_url,
+                        challenge,
+                        provenance=reference,
+                        challenge_offset=offset,
+                    )
+                )
+            continue
+        query: dict[str, list[str]] = {}
+        for part in source.query.decode().split("&"):
+            name, _, value = part.partition("=")
+            query.setdefault(name, []).append(value)
+        versions = query.get("v", [])
+        if any(_is_uuid(version) for version in versions):
+            if len(versions) == 1 and len(query.get("t", [])) <= 1:
+                found.append(Sbsd(page, script_url, provenance=reference))
+            continue
+        if source.path and not source.path.lower().endswith((".js", ".mjs", ".cjs")):
+            found.append(Sensor(page, script_url, provenance=reference))
+    if where is not None:
+        return [item for item in found if bool(where.resolve(item))]
+    return found

@@ -1,155 +1,183 @@
+import asyncio
+from typing import cast
+
 import pytest
+from magic_filter import MagicFilter
 
-from nullgate import (
-    get_pixel_challenge,
-    get_pixel_script_url,
-    get_sensor_script_url,
-)
+from nullgate import F, NullgateClient, NullgateClientAsync, Page
+from nullgate.akamai import Pixel, Sbsd, Sensor
 
-
-def test_pixel_challenge_embedded_among_statements() -> None:
-    html = """
-        <html><script>
-        window.ready = true; var bazadebezolkohpepadr = '001234'; finish();
-        </script></html>
-    """
-    assert get_pixel_challenge(html) == "001234"
+VERSION = "11111111-2222-4333-8444-555555555555"
 
 
-def test_missing_pixel_challenge() -> None:
-    assert get_pixel_challenge('<script>var other = "1234";</script>') is None
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+def test_local_discovery_retains_page_occurrences_and_provenance(
+    asynchronous: bool,
+) -> None:
+    page = Page(
+        "https://target.example/login/index",
+        '<base href="/resources/">\n'
+        '<script>var bazadebezolkohpepadr = "001234";</script>\n'
+        '<script src="/akam/13/aB09?x=a%2Fb+z&amp;x=two#ignored"></script>\n'
+        f'<script src="/.well-known/sbsd/neutral?v={VERSION}"></script>\n'
+        f'<script src="opaque/block?v={VERSION}&amp;t="></script>\n'
+        '<script src="opaque/sensor?first=%2f&amp;second=+value"></script>\n'
+        '<script src="opaque/sensor?first=%2f&amp;second=+value"></script>',
+    )
+    client = (
+        NullgateClientAsync("not-used") if asynchronous else NullgateClient("not-used")
+    )
+    # Both clients discover synchronously; no network client needs to be opened.
+    found = client.find_protections(page)
+    if isinstance(client, NullgateClientAsync):
+        asyncio.run(client.aclose())
+    else:
+        client.close()
+    assert [type(item) for item in found] == [Pixel, Sbsd, Sbsd, Sensor, Sensor]
+    assert all(item.page is page for item in found)
+    pixel, normal, blocking, first_sensor, second_sensor = found
+    assert isinstance(pixel, Pixel)
+    assert pixel.challenge == "001234"
+    assert pixel.script_url == "https://target.example/akam/13/aB09?x=a%2Fb+z&x=two"
+    assert pixel.provenance is not None
+    assert pixel.provenance.raw_source == "/akam/13/aB09?x=a%2Fb+z&x=two#ignored"
+    assert (pixel.provenance.tag_index, pixel.provenance.line) == (1, 3)
+    assert pixel.challenge_offset is not None
+    assert page.html[pixel.challenge_offset :].startswith("bazadebezolkohpepadr")
+    assert isinstance(normal, Sbsd) and not normal.blocking
+    assert isinstance(blocking, Sbsd) and blocking.blocking
+    assert blocking.script_url.endswith(f"?v={VERSION}&t=")
+    assert first_sensor.script_url == (
+        "https://target.example/resources/opaque/sensor?first=%2f&second=+value"
+    )
+    assert first_sensor.provenance != second_sensor.provenance
 
 
 @pytest.mark.parametrize(
-    ("base", "sensor"),
+    ("base", "expected"),
     [
-        ("", "https://shop.example/login/assets/collector?x=1&y=2"),
-        (
-            '<base href="/resources/">',
-            "https://shop.example/resources/assets/collector?x=1&y=2",
-        ),
-        (
-            '<base href="http://[">',
-            "https://shop.example/login/assets/collector?x=1&y=2",
-        ),
+        ("", "https://target.example/login/collector"),
+        ('<base href="/assets/">', "https://target.example/assets/collector"),
+        ('<base href="http://[">', "https://target.example/login/collector"),
+        ('<base href="javascript:ignored">', "https://target.example/login/collector"),
+        ('<base href="https://other.example/">', None),
     ],
 )
-def test_script_urls_resolve_base_entities_and_duplicates(
-    base: str, sensor: str
+def test_discovery_resolves_only_same_origin_active_classic_scripts(
+    base: str, expected: str | None
 ) -> None:
-    html = (
-        base
-        + """
-        <!-- <script src="/ignored"></script> -->
-        <template><script src="/template"></script></template>
-        <noscript><script src="/noscript"></script></noscript>
-        <script type="module" src="/app.js"></script>
-        <script nomodule src="/legacy.js"></script>
-        <script type="application/json" src="/data"></script>
-        <script src="https://cdn.example/analytics.js"></script>
-        <script src="http://shop.example/insecure"></script>
-        <script src="https://shop.example:8443/other"></script>
-        <script src="javascript:alert(1)"></script>
-        <script src="http://["></script>
-        <script src=""></script>
-        <SCRIPT TYPE="text/javascript"
-            SRC="assets/collector?x=1&amp;y=2#fragment" async></SCRIPT>
-        <script src="assets/collector?x=1&amp;y=2"></script>
-        <script src="//SHOP.EXAMPLE:443/akam/13/7aB0?version=2"></script>
-    """
+    page = Page(
+        "https://target.example/login/page",
+        base + '<!-- <script src="/comment"></script> -->'
+        '<template><script src="/template"></script></template>'
+        '<noscript><script src="/noscript"></script></noscript>'
+        '<script type="module" src="/module"></script>'
+        '<script nomodule src="/legacy"></script>'
+        '<script type="application/json" src="/data"></script>'
+        '<script src="https://other.example/cross"></script>'
+        '<script src="http://target.example/insecure"></script>'
+        '<script src="https://target.example:8443/port"></script>'
+        '<script src="http://["></script>'
+        '<script src="javascript:ignored"></script>'
+        '<script src=""></script>'
+        '<SCRIPT TYPE="text/javascript" SRC="collector" '
+        'src="https://other.example/duplicate"></SCRIPT>',
     )
-    page = "https://shop.example/login/index"
-    assert get_sensor_script_url(html, page) == sensor
-    assert get_pixel_script_url(html, page) == (
-        "https://shop.example/akam/13/7aB0?version=2"
+    with NullgateClient("not-used") as client:
+        found = client.find_protections(page)
+    assert [item.script_url for item in found] == (
+        [] if expected is None else [expected]
     )
 
 
-def test_sensor_discovery_ignores_frontend_assets() -> None:
-    sensor = "/opaque/session/collector"
-    html = f"""
-        <script src="/static/checkout/bundle.js"></script>
-        <script src="/static/catalog/bundle.js"></script>
-        <script src="{sensor}?version=2"></script>
-        <script src="/static/account/bundle.js"></script>
-        <script src="/static/navigation/bundle.js"></script>
-        <script src="/static/forms/bundle.js"></script>
-        <script src="/static/shared/bundle.js"></script>
-        <script src="/akam/13/abc"></script>
-    """
-    assert get_sensor_script_url(html, "https://shop.example/page") == (
-        f"https://shop.example{sensor}?version=2"
+def test_discovery_exposes_ambiguity_instead_of_picking_a_script_or_challenge() -> None:
+    page = Page(
+        "https://target.example/",
+        '<script>bazadebezolkohpepadr="12"; bazadebezolkohpepadr="34";</script>'
+        '<script src="/akam/13/abc"></script>'
+        '<script src="/akam/13/def"></script>'
+        '<script src="/first"></script><script src="/second"></script>',
     )
-    assert get_pixel_script_url(html, "https://shop.example/page") == (
-        "https://shop.example/akam/13/abc"
-    )
+    with NullgateClient("not-used") as client:
+        found = client.find_protections(page)
+    assert [
+        (item.script_url, item.challenge) for item in found if isinstance(item, Pixel)
+    ] == [
+        ("https://target.example/akam/13/abc", "12"),
+        ("https://target.example/akam/13/abc", "34"),
+        ("https://target.example/akam/13/def", "12"),
+        ("https://target.example/akam/13/def", "34"),
+    ]
+    assert [item.script_url for item in found if isinstance(item, Sensor)] == [
+        "https://target.example/first",
+        "https://target.example/second",
+    ]
 
 
 @pytest.mark.parametrize(
     "source",
-    [
-        "/assets/app.js",
-        "/assets/app.JS?version=2",
-        "/assets/app.mjs",
-        "/assets/app.cjs",
-        "/assets/app%2Ejs",
-    ],
+    ["/app.js", "/app.JS?x=2", "/app.mjs", "/app.cjs", "/app%2Ejs"],
 )
-def test_javascript_assets_are_not_sensor_candidates(source: str) -> None:
-    assert (
-        get_sensor_script_url(
-            f'<script src="{source}"></script>', "https://shop.example/page"
+def test_js_assets_are_not_relabelled_as_sensors(source: str) -> None:
+    with NullgateClient("not-used") as client:
+        assert (
+            client.find_protections(
+                Page("https://target.example/", f'<script src="{source}"></script>')
+            )
+            == []
         )
-        is None
-    )
 
 
-def test_sensor_discovery_checks_path_suffix_not_directory_or_query() -> None:
-    html = """
-        <script src="/assets/app.js?next=/collector"></script>
-        <script src="/version.js/collector?file=app.js"></script>
-    """
-    assert get_sensor_script_url(html, "https://shop.example/page") == (
-        "https://shop.example/version.js/collector?file=app.js"
+def test_pixel_requires_live_challenge_and_sbsd_rejects_ambiguous_service_queries() -> (
+    None
+):
+    page = Page(
+        "https://target.example/",
+        '<!-- bazadebezolkohpepadr="123" -->'
+        '<template><script>bazadebezolkohpepadr="456";</script></template>'
+        '<script type="application/json">bazadebezolkohpepadr="789";</script>'
+        '<script src="/akam/13/abc"></script>'
+        f'<script src="/duplicate?v={VERSION}&amp;v={VERSION}"></script>'
+        f'<script src="/tokens?v={VERSION}&amp;t=one&amp;t=two"></script>',
     )
+    with NullgateClient("not-used") as client:
+        assert client.find_protections(page) == []
+
+
+@pytest.mark.parametrize("token", ["", "=", "=opaque%2Ftoken+part"])
+def test_sbsd_blocking_is_query_presence_not_truthiness(token: str) -> None:
+    sbsd = Sbsd(
+        Page("https://target.example/", ""),
+        f"https://target.example/s?v={VERSION}&t{token}",
+    )
+    assert sbsd.blocking
+    assert not Sbsd(sbsd.page, f"https://target.example/s?v={VERSION}&other=t").blocking
+
+
+def test_magic_filter_only_resolves_each_concrete_protection() -> None:
+    page = Page(
+        "https://target.example/",
+        f'<script src="/one?v={VERSION}"></script>'
+        f'<script src="/two?v={VERSION}&amp;t="></script>'
+        '<script src="/sensor"></script>'
+        '<script src="/turnstile/v0/api.js"></script>',
+    )
+    with NullgateClient("not-used") as client:
+        assert [
+            item.script_url
+            for item in client.find_protections(
+                page, where=(F.provider == "akamai") & (F.kind == "sbsd") & F.blocking
+            )
+        ] == [f"https://target.example/two?v={VERSION}&t="]
+        assert client.find_protections(page, where=F.missing_attribute) == []
+        assert client.find_protections(page, where=F.provider == "turnstile") == []
+        with pytest.raises(TypeError):
+            client.find_protections(page, where=cast(MagicFilter, lambda item: True))
 
 
 @pytest.mark.parametrize(
-    ("find", "html"),
-    [
-        (
-            get_sensor_script_url,
-            '<script src="/app.js"></script>'
-            '<script src="/one"></script><script src="/two"></script>',
-        ),
-        (
-            get_pixel_script_url,
-            '<script src="/akam/13/abc"></script><script src="/akam/13/def"></script>',
-        ),
-    ],
+    "url", ["/relative", "file:///tmp/page", "javascript:x", "https://["]
 )
-def test_ambiguous_script_urls_are_not_guessed(find, html: str) -> None:
-    with pytest.raises(ValueError, match="Multiple .* script candidates"):
-        find(html, "https://shop.example/login")
-
-
-def test_missing_script_urls_and_cross_origin_base() -> None:
-    html = '<base href="https://cdn.example/"><script src="collector"></script>'
-    assert get_sensor_script_url(html, "https://shop.example/login") is None
-    assert get_pixel_script_url(html, "https://shop.example/login") is None
-    assert get_sensor_script_url("<p>No scripts</p>", "https://shop.example") is None
-
-
-def test_script_discovery_uses_the_first_duplicate_attribute() -> None:
-    html = '<script src="/collector" src="https://cdn.example/ignored"></script>'
-    assert get_sensor_script_url(html, "https://shop.example") == (
-        "https://shop.example/collector"
-    )
-
-
-@pytest.mark.parametrize(
-    "page_url", ["/login", "file:///tmp/page.html", "javascript:x"]
-)
-def test_script_discovery_requires_an_http_page(page_url: str) -> None:
-    with pytest.raises(ValueError, match="absolute HTTP"):
-        get_sensor_script_url('<script src="/collector"></script>', page_url)
+def test_page_requires_an_absolute_http_url(url: str) -> None:
+    with pytest.raises(ValueError):
+        Page(url, "")

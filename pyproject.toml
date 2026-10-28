@@ -5,10 +5,10 @@ build-backend = "hatchling.build"
 [project]
 name = "nullgate-sdk-py"
 version = "0.1.0"
-description = "Generate Akamai sensor and pixel payloads with Nullgate's typed Python SDK."
+description = "Typed clients for Nullgate's supported protection generation APIs."
 readme = "README.md"
 requires-python = ">=3.11,<3.16"
-dependencies = ["httpx>=0.28,<1"]
+dependencies = ["httpx>=0.28,<1", "magic-filter>=1.0.12,<2"]
 classifiers = [
     "Intended Audience :: Developers",
     "Operating System :: OS Independent",
@@ -33,6 +33,7 @@ dev = [
     "ruff>=0.14",
     "mypy>=1.19",
     "pytest>=9",
+    "wreq==0.13.0",
 ]
 
 [tool.hatch.build]
@@ -47,6 +48,7 @@ include = [
     "/src/nullgate/**/*.py",
     "/src/nullgate/py.typed",
     "/tests/**/*.py",
+    "/examples/**/*.py",
     "/README.md",
     "/assets/logo.svg",
     "/assets/avatar.svg",

@@ -3,7 +3,7 @@ from types import MappingProxyType
 
 import pytest
 
-from nullgate import prepare_inputs
+from nullgate.akamai import prepare_inputs
 
 
 def test_explicit_fields_preserve_order_and_hide_utf16_values() -> None:

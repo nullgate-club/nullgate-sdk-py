@@ -1,184 +1,117 @@
 <img src="https://raw.githubusercontent.com/nullgate-club/nullgate-sdk-py/main/assets/logo.svg" alt="Nullgate" width="280">
 
-# Python SDK
+# Nullgate Python SDK
 
-![Python 3.11–3.15](https://img.shields.io/badge/Python-3.11%E2%80%933.15-3776AB)
-![Typed](https://img.shields.io/badge/Types-Typed-28A36A)
+Typed synchronous and asynchronous clients, local protection discovery, isolated
+sessions, ready-to-send solutions, and optional failure reports.
 
-Generate Akamai sensor and pixel payloads, with sync and async clients.
+The `next` branch requires the updated Nullgate backend, including `X-Request-ID`
+and analytics reporting. Until the backend cutover, use an updated preview
+deployment via `base_url` and `analytics_url` (the target example reads
+`NULLGATE_BASE_URL` and `ANALYTICS_URL`). Do not use this branch against the old
+production API. The existing `main` branch remains compatible with that API until
+the coordinated server upgrade.
 
-[Documentation](https://docs.nullgate.club) · [Python guide](https://docs.nullgate.club/examples/python) · [Repository](https://github.com/nullgate-club/nullgate-sdk-py) · [Issues](https://github.com/nullgate-club/nullgate-sdk-py/issues)
+## Install from GitHub
 
-## Install
+Python 3.11–3.15:
 
 ```sh
-python -m pip install nullgate-sdk-py
+python -m pip install "git+https://github.com/nullgate-club/nullgate-sdk-py.git@next"
 ```
 
-Import as `nullgate`. Your `api_key` is the secret `ng_…` account key; the separate,
-required `uuid` selects a browser profile.
+Import the package as `nullgate`. This SDK is source-installed from public GitHub;
+it is not released to PyPI. Git must be available when pip installs it.
 
-## Generate sensor data
+## Open a session
 
-Fetch the page, discover its sensor script, then fetch that script with your
-target client.
+Create the client once. Open an independent session for each document while
+reusing your identity and target cookie jar across navigation.
 
 ```python
-import json
 import os
-import time
-from uuid import uuid4
+from uuid import UUID
 
-import httpx
-from nullgate import get_sensor_script_url, open_session
+from nullgate import NullgateClientAsync, Page
+from nullgate.akamai import Pixel, PixelParams, Sbsd, SbsdParams, Sensor, SensorParams
 
-user_agent = os.environ["USER_AGENT"]
-page_url = "https://shop.example/login"
-
-with (
-    httpx.Client(headers={"User-Agent": user_agent}, follow_redirects=True) as target,
-    open_session(uuid=uuid4(), api_key=os.environ["NULLGATE_API_KEY"]) as api,
-):
-    page = target.get(page_url)
-    page.raise_for_status()
-    script_url = get_sensor_script_url(page.text, str(page.url))
-    if script_url is None:
-        raise ValueError("The page has no sensor script")
-    source = target.get(script_url)
-    source.raise_for_status()
-    website = {"url": str(page.url), "html": page.text}
-    script = {"source": str(source.url), "text": source.text}
-
-    result = api.sensor_data(
-        website=website,
-        script=script,
-        user_agent=user_agent,
-        cookies=dict(target.cookies),
-    )
-    time.sleep(max(0, result["send_at"] - time.time()))
-    response = target.post(
-        script["source"],
-        content=json.dumps({"sensor_data": result["sensor_data"]}),
-        headers={
-            **result["headers"],
-            "Content-Type": "text/plain;charset=UTF-8",
-            "Referer": website["url"],
-        },
-    )
-    response.raise_for_status()
+async def generate(page: Page, scripts: dict[str, str], cookies: dict[str, str]):
+    async with NullgateClientAsync(
+        os.environ["NULLGATE_API_KEY"],
+        base_url=os.environ["NULLGATE_BASE_URL"],
+        analytics_url=os.environ["ANALYTICS_URL"],
+    ) as client:
+        async with client.open(
+            identity=UUID(os.environ["NULLGATE_IDENTITY"]),
+            user_agent=os.environ["USER_AGENT"],
+        ) as session:
+            for protection in client.find_protections(page):
+                script = scripts[protection.script_url]
+                match protection:
+                    case Sensor():
+                        params = SensorParams(protection, script, cookies=cookies)
+                    case Pixel():
+                        params = PixelParams(protection, script)
+                    case Sbsd():
+                        params = SbsdParams(protection, script, cookies=cookies)
+                    case _:
+                        continue
+                yield await session.solve(params)
 ```
 
-`sensor_data()` returns a `SensorDataResponse` typed dictionary containing
-`sensor_data`, `headers`, and `send_at`. The latter is the earliest target POST
-time, in Unix seconds. Wait until then before sending the payload. Generation
-alone does not establish that the target accepted it.
+`Page(url=..., html=...)` contains the page you fetched. Discovery is local: it
+does not download scripts or run the producer. Results preserve ambiguous
+candidates; select the matching protection rather than assuming the first script
+is genuine. Use `F` filters when useful, and `match` to narrow concrete types.
 
-The default API URL is `https://akamai.nullgate.club`. To use another endpoint,
-pass it as the first argument to `open_session()` or `async_open_session()`.
-Both factories accept HTTPX options such as `timeout`, `headers`, and `proxy`.
+`NullgateClient` provides the same flow synchronously with `with`; its methods,
+solutions and sessions do not require `await`.
 
-### Async
+## Send a solution
 
-Use `async_open_session()` in an async function. With the same fetched `website`,
-`script`, and User-Agent, the call is:
+A solution contains `method`, `url`, `headers`, exact string `body`, absolute Unix
+`send_at`, and the server's `request_id`. Await `solution.wait()`, then send the
+body unchanged with your target HTTP client. Do not JSON-encode it again.
 
-```python
-import asyncio
+Your target client owns transport settings, redirects and cookies. Never send
+your Nullgate API key to the target site. The SDK's HTTPX connection is for the
+Nullgate API, not a browser impersonation transport.
 
-from nullgate import async_open_session
+[The complete example](examples/target.py) uses Python `wreq==0.13.0` with Chrome
+146/Windows, scoped script-visible cookie observations and a persistent target
+cookie jar:
 
-async with async_open_session(
-    uuid=uuid4(), api_key=os.environ["NULLGATE_API_KEY"]
-) as api:
-    result = await api.sensor_data(
-        website=website, script=script, user_agent=user_agent
-    )
-    await asyncio.sleep(max(0, result["send_at"] - time.time()))
+```sh
+python -m pip install wreq==0.13.0
+export NULLGATE_API_KEY='your-account-key'
+export NULLGATE_IDENTITY='your-persistent-profile-uuid'
+export TARGET_URL='https://your-target.example/page'
+python examples/target.py
 ```
 
-### Pixel
+Optional environment variables are `TARGET_PROXY`, `NULLGATE_BASE_URL` and
+`ANALYTICS_URL`. `REPORT_FAILURES=1` enables best-effort reports for observed
+failures in the example. No credentials or target captures are bundled.
 
-`pixel()` requires a page-specific `challenge` and the matching pixel script:
+Keep the transport preset, User-Agent and generated identity coherent. A client
+preset does not change the network stack of your proxy exit or guarantee target
+access. A sensor submission ceiling is not clearance. A successful SBSD POST is
+not blocking clearance: re-fetch the original page and check its actual result.
 
-```python
-from nullgate import get_pixel_challenge, get_pixel_script_url
+## Errors and reports
 
-pixel_url = get_pixel_script_url(website["html"], website["url"])
-challenge = get_pixel_challenge(website["html"])
-if pixel_url is not None and challenge is not None:
-    source = target.get(pixel_url)
-    source.raise_for_status()
-    pixel_script = {"source": str(source.url), "text": source.text}
-    pixel = api.pixel(
-        website=website,
-        script=pixel_script,
-        user_agent=user_agent,
-        challenge=challenge,
-    )
-    time.sleep(max(0, pixel["send_at"] - time.time()))
-    response = target.post(
-        pixel["url"], content=pixel["body"], headers=pixel["headers"]
-    )
-    response.raise_for_status()
-```
+`NullgateAPIError` retains `status_code`, `detail`, `request_id`, and the original
+HTTPX request/response. Transport and malformed-response errors remain distinct.
 
-Skip pixel generation when no challenge is present. Its `PixelResponse` typed
-dictionary contains `url`, `body`, `headers`, and `send_at`. Async clients expose
-both methods with the same arguments; await the result.
+After an actual target failure, call `await solution.report()` or
+`await client.report(request_id)`. In sync code omit `await`. Reporting sends only
+the request ID to analytics, without account authorization or target cookies.
+It does not retry or refund the operation. `True` means HTTP delivery succeeded,
+not that a report was accepted: repeated, unknown, expired and rate-limited IDs
+receive the same quiet acknowledgement. Network failures return `False`;
+cancellation and local programming errors are not swallowed.
 
-### Script discovery
-
-`get_sensor_script_url(html, page_url)` and `get_pixel_script_url(html, page_url)`
-return absolute URLs or `None`. They resolve relative paths and `<base href>`,
-preserve query strings, and ignore modules, inactive markup and other origins.
-
-Pixel URLs match `/akam/13/<hex>`. Sensor discovery skips pixel URLs and frontend
-assets ending in `.js`, `.mjs` or `.cjs`, then selects the unique remaining
-same-origin classic script. Suffix matching uses the URL path, not its query.
-Multiple candidates raise `ValueError`; select the URL explicitly in that case.
-Also provide the URL directly if your sensor uses one of those asset suffixes.
-These helpers do not fetch or execute JavaScript.
-
-## State and inputs
-
-Reuse one `open_session()` client for sequential generation calls. It carries
-`X-State-ID` forward automatically; a new client starts fresh state. Idle state
-expires after five minutes. Keep the profile UUID, User-Agent, and timezone
-consistent within a session. The optional `timezone` is an IANA name such as
-`Europe/Berlin`; new state defaults to UTC.
-
-`sensor_data()` accepts only the inputs your application fills, for example:
-
-```python
-inputs = [{"name": "email", "type": "email", "value": "hello@example.com"}]
-```
-
-Pass this as `inputs=inputs`. Values are hashed locally into summaries before
-sending. `inputs=None` keeps previous declarations; `inputs=[]` clears them.
-Page HTML is sent as supplied, including any values already embedded in it.
-
-Explicit `actions` replace automatic interactions; `actions=[]` disables them.
-Event times are elapsed milliseconds from the document start.
-`is_enough(abck, response_count=...)` checks the target cookie's sensor stop
-signal, not whether a login or other target action succeeded.
-
-## Errors
-
-Generation methods raise `httpx.HTTPStatusError` for unsuccessful API responses.
-Inspect `error.response` for the status and response body. Network failures and
-timeouts propagate as HTTPX exceptions, including `httpx.RequestError` and
-`httpx.TimeoutException`.
-
-| Status | Meaning |
-| --- | --- |
-| 400 / 422 | Invalid request or unsupported source |
-| 401 | Missing, invalid, or disabled account key |
-| 402 | Insufficient balance |
-| 503 | Service temporarily unavailable |
-
-## Development
-
-With [uv](https://docs.astral.sh/uv/) installed, run from the repository root:
+## Develop
 
 ```sh
 make setup
@@ -187,6 +120,8 @@ make check
 make build
 ```
 
-`check` runs Ruff, mypy, and pytest. `build` writes a wheel and source distribution
-to `dist/`. Use `make PYTHON=3.15 setup check build` to select another supported
-Python version.
+The gate checks formatting, typing and behavioral tests, including type-checking
+the target example; `make build` produces local distribution archives without
+publishing. CI runs `make setup`, `make check` and `make build` on Python 3.11 and
+3.15. Canonical SDK-first documentation is at
+[docs.nullgate.club](https://docs.nullgate.club).
