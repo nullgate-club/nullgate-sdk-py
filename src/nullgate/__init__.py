@@ -22,7 +22,7 @@ from .profile import (
 )
 from .solution import Solution, SolutionAsync
 from .target import Target, TargetRequest, TargetResponse, WreqTarget
-from .threatmetrix import ThreatMetrix, ThreatMetrixParams
+from .threatmetrix import ThreatMetrix, ThreatMetrixCollector, ThreatMetrixParams
 
 __all__ = [
     "AmbiguousProtectionError",
@@ -48,6 +48,7 @@ __all__ = [
     "TargetRequest",
     "TargetResponse",
     "ThreatMetrix",
+    "ThreatMetrixCollector",
     "ThreatMetrixParams",
     "WreqTarget",
 ]

@@ -46,11 +46,54 @@ class ThreatMetrix:
 
 
 @dataclass(frozen=True, slots=True)
+class ThreatMetrixCollector:
+    """A caller-resolved collector, not a replacement tags loader."""
+
+    page: Page
+    script_url: str
+    org_id: str
+    session_id: str
+    provider: ClassVar[Literal["threatmetrix"]] = "threatmetrix"
+    kind: ClassVar[Literal["profile"]] = "profile"
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.page, Page):
+            raise TypeError("ThreatMetrixCollector requires a Page")
+        parsed = urlsplit(self.script_url)
+        if (
+            parsed.scheme not in {"http", "https"}
+            or not parsed.hostname
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.netloc.endswith(":")
+            or "#" in self.script_url
+            or "\\" in self.script_url
+            or any(
+                char.isspace() or ord(char) < 32 or ord(char) == 127
+                for char in self.script_url
+            )
+        ):
+            raise ValueError(
+                "Collector requires an absolute HTTP URL without userinfo or fragment"
+            )
+        _ = parsed.port
+        if any(
+            not isinstance(value, str)
+            or not value.strip()
+            or any(character in value for character in "\r\n")
+            for value in (self.org_id, self.session_id)
+        ):
+            raise ValueError("Collector organization and session must be nonempty")
+
+
+@dataclass(frozen=True, slots=True)
 class ThreatMetrixParams:
-    protection: ThreatMetrix
+    protection: ThreatMetrix | ThreatMetrixCollector
     inputs: Sequence[Mapping[str, str]] | None = field(default=None, repr=False)
     actions: Sequence[Mapping[str, object]] | None = field(default=None, repr=False)
 
     def __post_init__(self) -> None:
-        if not isinstance(self.protection, ThreatMetrix):
-            raise TypeError("ThreatMetrixParams requires a ThreatMetrix protection")
+        if not isinstance(self.protection, (ThreatMetrix, ThreatMetrixCollector)):
+            raise TypeError(
+                "ThreatMetrixParams requires a tags or collector protection"
+            )

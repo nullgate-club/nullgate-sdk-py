@@ -20,7 +20,7 @@ from websockets.exceptions import InvalidStatus
 from ._turn import _TurnAllocation, _TurnServer
 from .akamai.inputs import _prepare_actions, prepare_inputs
 from .target import Target, TargetRequest
-from .threatmetrix import ThreatMetrixParams
+from .threatmetrix import ThreatMetrixCollector, ThreatMetrixParams
 
 _PROFILE_BASE_URL = "https://threatmetrix.nullgate.club"
 _T = TypeVar("_T")
@@ -202,9 +202,17 @@ class ProfileAsync:
                 "document_id": page.document_id,
                 "started_at_ms": page.started_at_ms,
             },
-            "tags_url": params.protection.script_url,
             "timezone": timezone,
         }
+        protection = params.protection
+        if isinstance(protection, ThreatMetrixCollector):
+            self._start_message["collector"] = {
+                "url": protection.script_url,
+                "org_id": protection.org_id,
+                "session_id": protection.session_id,
+            }
+        else:
+            self._start_message["tags_url"] = protection.script_url
         if params.inputs is not None:
             self._start_message["inputs"] = prepare_inputs(params.inputs)
         if params.actions is not None:

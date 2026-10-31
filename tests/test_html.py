@@ -10,6 +10,7 @@ from nullgate import (
     NullgateClient,
     NullgateClientAsync,
     Page,
+    ThreatMetrixCollector,
 )
 from nullgate.akamai import Pixel, Sbsd, Sensor
 from nullgate.html import find_protections
@@ -267,3 +268,25 @@ def test_module_tags_are_active_without_expanding_akamai_classic_discovery() -> 
     [protection] = find_protections(page)
     assert isinstance(protection, ThreatMetrix)
     assert protection.script_url.endswith("session_id=session")
+
+
+@pytest.mark.parametrize(
+    "url,org_id,session_id",
+    [
+        ("/opaque.js", "org", "session"),
+        ("https://@target.example/opaque", "org", "session"),
+        ("https://target.example/opaque#", "org", "session"),
+        ("https://target.example:/opaque", "org", "session"),
+        ("https://target.example:65536/opaque", "org", "session"),
+        ("https://target.example/opaque\n", "org", "session"),
+        ("https://target.example/opaque", " ", "session"),
+        ("https://target.example/opaque", "org", "line\r\nbreak"),
+    ],
+)
+def test_explicit_collector_rejects_unsafe_url_and_identity(
+    url: str, org_id: str, session_id: str
+) -> None:
+    with pytest.raises(ValueError):
+        ThreatMetrixCollector(
+            Page("https://target.example/", ""), url, org_id, session_id
+        )

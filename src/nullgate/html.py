@@ -12,12 +12,12 @@ from magic_filter import MagicFilter
 from .akamai import Pixel, Sbsd, Sensor
 from .akamai import Protection as AkamaiProtection
 from .models import Page, ScriptReference
-from .threatmetrix import ThreatMetrix
+from .threatmetrix import ThreatMetrix, ThreatMetrixCollector
 
 _PIXEL_CHALLENGE = re.compile(r"""\bbazadebezolkohpepadr\s*=\s*(['"])([0-9]+)\1""")
 _PIXEL_PATH = re.compile(r"/akam/13/[0-9a-fA-F]+")
 
-Protection: TypeAlias = AkamaiProtection | ThreatMetrix
+Protection: TypeAlias = AkamaiProtection | ThreatMetrix | ThreatMetrixCollector
 
 
 class AmbiguousProtectionError(ValueError):

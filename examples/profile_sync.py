@@ -12,6 +12,7 @@ from nullgate import (
     NullgateClient,
     Page,
     ThreatMetrix,
+    ThreatMetrixCollector,
     ThreatMetrixParams,
     WreqTarget,
 )
@@ -24,6 +25,18 @@ USER_AGENT = (
 
 def main() -> None:
     proxy = os.environ.get("TARGET_PROXY") or None
+    collector_url = os.environ.get("TMX_COLLECTOR_URL")
+    entry_values = (
+        collector_url,
+        os.environ.get("TMX_ORG_ID"),
+        os.environ.get("TMX_SESSION_ID"),
+    )
+    if any(value is not None for value in entry_values) and not all(
+        value and value.strip() for value in entry_values
+    ):
+        raise ValueError(
+            "Set TMX_COLLECTOR_URL, TMX_ORG_ID and TMX_SESSION_ID together"
+        )
     with (
         Client(
             emulation=Emulation(Profile.Chrome146, Platform.Windows),
@@ -47,9 +60,18 @@ def main() -> None:
     ):
         with http.get(os.environ["TARGET_URL"]) as response:
             page = Page(response.url, response.text())
-        [protection] = client.find_protections(page, where=F.provider == "threatmetrix")
-        if not isinstance(protection, ThreatMetrix):
-            raise TypeError("Expected a ThreatMetrix protection")
+        if collector_url is not None:
+            protection: ThreatMetrix | ThreatMetrixCollector = ThreatMetrixCollector(
+                page,
+                collector_url,
+                os.environ["TMX_ORG_ID"],
+                os.environ["TMX_SESSION_ID"],
+            )
+        else:
+            [found] = client.find_protections(page, where=F.provider == "threatmetrix")
+            if not isinstance(found, ThreatMetrix):
+                raise TypeError("Expected a ThreatMetrix protection")
+            protection = found
         with session.profile(
             ThreatMetrixParams(protection), WreqTarget(http, proxy=proxy)
         ) as profile:

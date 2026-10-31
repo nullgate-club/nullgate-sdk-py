@@ -236,6 +236,31 @@ Synchronous code uses `NullgateClient`, `with session.profile(...) as profile`,
 TURN between calls. See [`examples/profile_sync.py`](examples/profile_sync.py);
 [`examples/target.py`](examples/target.py) supports both Akamai and TMX.
 
+For a caller-resolved collector, skip discovery and keep the original page:
+
+```python
+from nullgate import ThreatMetrixCollector
+
+protection = ThreatMetrixCollector(page, collector_url, org_id, session_id)
+async with await session.profile(ThreatMetrixParams(protection), target) as profile:
+    # Keep this handle for the document's lifetime.
+    await profile.pagehide()
+```
+
+The URL must be absolute HTTP(S); it is sent unchanged with explicit organization
+and session IDs, even when its query keys are opaque. Resolve site-specific wrappers
+in your application; do not fabricate a tags script or use a `noscript` fallback.
+Use the same session ID in any associated form field, not the Nullgate state ID.
+The sync profile example accepts `TMX_COLLECTOR_URL`, `TMX_ORG_ID` and
+`TMX_SESSION_ID` together. HTTP, proxy, cookie and lifecycle ownership are unchanged.
+
+[`examples/kleinanzeigen.py`](examples/kleinanzeigen.py) shows a caller-owned port
+of the current public `wenkse` URL builder. Run it with `TARGET_URL` and
+`NULLGATE_API_KEY`; optionally reuse `TMX_SESSION_ID` and set `TARGET_PROXY`.
+It waits for collection, then explicitly leaves, without attempting login.
+The site-specific builder is example code, not a parser or execution dependency
+of the SDK; inspect/update it if that site's wrapper changes.
+
 For a different maintained HTTP provider, use `Target(fetch, proxy=...)`.
 The callback accepts a `TargetRequest` (`role`, `url`, `method`, `headers`,
 raw `body: bytes | None`, and `credentials`) and returns a
