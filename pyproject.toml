@@ -8,7 +8,13 @@ version = "0.1.0"
 description = "Typed clients for Nullgate's supported protection generation APIs."
 readme = "README.md"
 requires-python = ">=3.11,<3.16"
-dependencies = ["httpx>=0.28,<1", "magic-filter>=1.0.12,<2"]
+dependencies = [
+    "aioice==0.10.2",
+    "httpx>=0.28,<1",
+    "magic-filter>=1.0.12,<2",
+    "python-socks==2.8.0",
+    "websockets>=15.0.1,<16",
+]
 classifiers = [
     "Intended Audience :: Developers",
     "Operating System :: OS Independent",
@@ -27,6 +33,9 @@ classifiers = [
 Documentation = "https://docs.nullgate.club"
 Repository = "https://github.com/nullgate-club/nullgate-sdk-py"
 Issues = "https://github.com/nullgate-club/nullgate-sdk-py/issues"
+
+[project.optional-dependencies]
+wreq = ["wreq==0.13.0"]
 
 [dependency-groups]
 dev = [

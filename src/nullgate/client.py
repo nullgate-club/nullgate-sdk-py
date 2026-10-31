@@ -6,16 +6,25 @@ import math
 from threading import Lock
 from types import TracebackType
 from typing import Literal, TypedDict, cast, overload
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import httpx
 from magic_filter import MagicFilter
 
-from .akamai import Params, PixelParams, Protection, SbsdParams, SensorParams
-from .akamai.inputs import prepare_inputs
-from .html import find_protections
+from .akamai import Params, PixelParams, SbsdParams, SensorParams
+from .akamai.inputs import _prepare_actions, prepare_inputs
+from .html import Protection, find_protections
 from .models import Page
+from .profile import (
+    _PROFILE_BASE_URL,
+    Profile,
+    ProfileAsync,
+    _profile_url,
+    _ProfileLoop,
+)
 from .solution import Solution, SolutionAsync
+from .target import Target
+from .threatmetrix import ThreatMetrixParams
 
 _BASE_URL = "https://akamai.nullgate.club"
 _ANALYTICS_URL = "https://analytics.nullgate.club"
@@ -79,24 +88,19 @@ def _payload(
             if params.inputs is not None:
                 values["inputs"] = prepare_inputs(params.inputs)
             if params.actions is not None:
-                actions: list[dict[str, object]] = []
-                for action in params.actions:
-                    if action.get("type") in ("input", "change") and isinstance(
-                        action.get("value"), str
-                    ):
-                        raise TypeError(
-                            "Raw action input values are not allowed; "
-                            "use a prepared InputValue"
-                        )
-                    actions.append(dict(action))
-                values["actions"] = actions
+                values["actions"] = _prepare_actions(params.actions)
         case SbsdParams():
             operation = "sbsd"
             values = {"cookies": dict(params.cookies or {})}
         case _:
             raise TypeError("solve requires PixelParams, SensorParams, or SbsdParams")
     protection = params.protection
-    values["website"] = {"url": protection.page.url, "html": protection.page.html}
+    values["website"] = {
+        "url": protection.page.url,
+        "html": protection.page.html,
+        "document_id": protection.page.document_id,
+        "started_at_ms": protection.page.started_at_ms,
+    }
     values["script"] = {"source": protection.script_url, "text": params.script}
     if timezone is not None:
         values["timezone"] = timezone
@@ -205,17 +209,23 @@ class NullgateClient:
         *,
         base_url: str = _BASE_URL,
         analytics_url: str = _ANALYTICS_URL,
+        profile_base_url: str = _PROFILE_BASE_URL,
         timeout: httpx.Timeout | float = 30.0,
         transport: httpx.BaseTransport | None = None,
     ) -> None:
         self._api_key = api_key
         self._base_url = base_url.rstrip("/")
         self._analytics_url = analytics_url.rstrip("/")
-        self._http = httpx.Client(timeout=timeout, transport=transport)
+        self._profile_base_url = profile_base_url
+        self._closed = False
+        self._profiles_lock = Lock()
+        self._profiles: set[Profile] = set()
+        self._profile_loop: _ProfileLoop | None = None
+        self._http = httpx.Client(timeout=timeout, transport=transport, trust_env=False)
 
     @property
     def is_closed(self) -> bool:
-        return self._http.is_closed
+        return self._closed or self._http.is_closed
 
     def open(
         self, *, identity: UUID | str, user_agent: str, timezone: str | None = None
@@ -248,7 +258,25 @@ class NullgateClient:
         return response.is_success
 
     def close(self) -> None:
-        self._http.close()
+        with self._profiles_lock:
+            if self._closed:
+                return
+            self._closed = True
+            profiles = tuple(self._profiles)
+            loop = self._profile_loop
+        failure: BaseException | None = None
+        for profile in profiles:
+            try:
+                profile.close()
+            except BaseException as exc:
+                failure = failure or exc
+        try:
+            if loop is not None:
+                loop.close()
+        finally:
+            self._http.close()
+        if failure is not None:
+            raise failure
 
     def __enter__(self) -> "NullgateClient":
         self._http.__enter__()
@@ -272,17 +300,24 @@ class NullgateClientAsync:
         *,
         base_url: str = _BASE_URL,
         analytics_url: str = _ANALYTICS_URL,
+        profile_base_url: str = _PROFILE_BASE_URL,
         timeout: httpx.Timeout | float = 30.0,
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         self._api_key = api_key
         self._base_url = base_url.rstrip("/")
         self._analytics_url = analytics_url.rstrip("/")
-        self._http = httpx.AsyncClient(timeout=timeout, transport=transport)
+        self._profile_base_url = profile_base_url
+        self._closed = False
+        self._profiles: set[ProfileAsync] = set()
+        self._close_task: asyncio.Task[None] | None = None
+        self._http = httpx.AsyncClient(
+            timeout=timeout, transport=transport, trust_env=False
+        )
 
     @property
     def is_closed(self) -> bool:
-        return self._http.is_closed
+        return self._closed or self._http.is_closed
 
     def open(
         self, *, identity: UUID | str, user_agent: str, timezone: str | None = None
@@ -314,8 +349,25 @@ class NullgateClientAsync:
             return False
         return response.is_success
 
-    async def aclose(self) -> None:
+    async def _finish_close(self) -> None:
+        self._closed = True
+        results = await asyncio.gather(
+            *(profile.aclose() for profile in tuple(self._profiles)),
+            return_exceptions=True,
+        )
         await self._http.aclose()
+        for result in results:
+            if isinstance(result, BaseException):
+                raise result
+
+    async def aclose(self) -> None:
+        if self._close_task is None:
+            self._close_task = asyncio.create_task(self._finish_close())
+        try:
+            await asyncio.shield(self._close_task)
+        except asyncio.CancelledError:
+            await self._close_task
+            raise
 
     async def __aenter__(self) -> "NullgateClientAsync":
         await self._http.__aenter__()
@@ -344,9 +396,11 @@ class NullgateSession:
         self.user_agent = user_agent
         self.timezone = timezone
         self._client = client
-        self._state_id: str | None = None
+        self._state_id: str | None = uuid4().hex
         self._closed = False
         self._lock = Lock()
+        self._profiles_lock = Lock()
+        self._profiles: set[Profile] = set()
 
     @property
     def is_closed(self) -> bool:
@@ -365,16 +419,17 @@ class NullgateSession:
         with self._lock:
             if self.is_closed:
                 raise RuntimeError("NullgateSession is closed")
+            request = _generate_request(
+                self._client._base_url,
+                self._client._api_key,
+                self.identity,
+                self.user_agent,
+                self.timezone,
+                self._state_id,
+                params,
+            )
             response = self._client._http.send(
-                _generate_request(
-                    self._client._base_url,
-                    self._client._api_key,
-                    self.identity,
-                    self.user_agent,
-                    self.timezone,
-                    self._state_id,
-                    params,
-                ),
+                request,
                 auth=None,
                 follow_redirects=False,
                 stream=True,
@@ -390,9 +445,72 @@ class NullgateSession:
             finally:
                 response.close()
 
+    def profile(self, params: ThreatMetrixParams, target: Target) -> Profile:
+        """Start one document, retaining its socket until explicit close."""
+        if not isinstance(params, ThreatMetrixParams) or not isinstance(target, Target):
+            raise TypeError("profile requires ThreatMetrixParams and Target")
+        with self._lock:
+            if self.is_closed:
+                raise RuntimeError("NullgateSession is closed")
+            url = _profile_url(self._client._profile_base_url, self.identity)
+            with self._client._profiles_lock:
+                if self._client.is_closed:
+                    raise RuntimeError("NullgateClient is closed")
+                if self._client._profile_loop is None:
+                    self._client._profile_loop = _ProfileLoop()
+                loop = self._client._profile_loop
+
+            def on_state(state_id: str) -> None:
+                if not self.is_closed:
+                    self._state_id = state_id
+
+            def on_close() -> None:
+                with self._client._profiles_lock, self._profiles_lock:
+                    self._client._profiles.discard(profile)
+                    self._profiles.discard(profile)
+
+            async def reporter(request_id: str) -> bool:
+                return await asyncio.to_thread(self._client.report, request_id)
+
+            active = ProfileAsync(
+                url=url,
+                api_key=self._client._api_key,
+                user_agent=self.user_agent,
+                state_id=self._state_id,
+                timezone=self.timezone,
+                params=params,
+                target=target,
+                on_state=on_state,
+                on_close=on_close,
+                reporter=reporter,
+                open_timeout=self._client._http.timeout.connect,
+            )
+            profile = Profile(active, loop, self._client.report)
+            with self._client._profiles_lock, self._profiles_lock:
+                if self.is_closed:
+                    raise RuntimeError("NullgateSession is closed")
+                self._client._profiles.add(profile)
+                self._profiles.add(profile)
+            try:
+                loop.run(active._start())
+            except BaseException:
+                profile.close()
+                raise
+            return profile
+
     def close(self) -> None:
-        self._closed = True
-        self._state_id = None
+        with self._profiles_lock:
+            self._closed = True
+            self._state_id = None
+            profiles = tuple(self._profiles)
+        failure: BaseException | None = None
+        for profile in profiles:
+            try:
+                profile.close()
+            except BaseException as exc:
+                failure = failure or exc
+        if failure is not None:
+            raise failure
 
     def __enter__(self) -> "NullgateSession":
         if self.is_closed:
@@ -422,9 +540,11 @@ class NullgateSessionAsync:
         self.user_agent = user_agent
         self.timezone = timezone
         self._client = client
-        self._state_id: str | None = None
+        self._state_id: str | None = uuid4().hex
         self._closed = False
         self._lock = asyncio.Lock()
+        self._profiles: set[ProfileAsync] = set()
+        self._close_task: asyncio.Task[None] | None = None
 
     @property
     def is_closed(self) -> bool:
@@ -443,16 +563,17 @@ class NullgateSessionAsync:
         async with self._lock:
             if self.is_closed:
                 raise RuntimeError("NullgateSessionAsync is closed")
+            request = _generate_request(
+                self._client._base_url,
+                self._client._api_key,
+                self.identity,
+                self.user_agent,
+                self.timezone,
+                self._state_id,
+                params,
+            )
             response = await self._client._http.send(
-                _generate_request(
-                    self._client._base_url,
-                    self._client._api_key,
-                    self.identity,
-                    self.user_agent,
-                    self.timezone,
-                    self._state_id,
-                    params,
-                ),
+                request,
                 auth=None,
                 follow_redirects=False,
                 stream=True,
@@ -468,9 +589,59 @@ class NullgateSessionAsync:
             finally:
                 await response.aclose()
 
-    async def aclose(self) -> None:
+    async def profile(self, params: ThreatMetrixParams, target: Target) -> ProfileAsync:
+        """Start profiling without transferring ownership of the target client."""
+        if not isinstance(params, ThreatMetrixParams) or not isinstance(target, Target):
+            raise TypeError("profile requires ThreatMetrixParams and Target")
+        async with self._lock:
+            if self.is_closed:
+                raise RuntimeError("NullgateSessionAsync is closed")
+
+            def on_state(state_id: str) -> None:
+                if not self.is_closed:
+                    self._state_id = state_id
+
+            def on_close() -> None:
+                self._client._profiles.discard(profile)
+                self._profiles.discard(profile)
+
+            profile = ProfileAsync(
+                url=_profile_url(self._client._profile_base_url, self.identity),
+                api_key=self._client._api_key,
+                user_agent=self.user_agent,
+                state_id=self._state_id,
+                timezone=self.timezone,
+                params=params,
+                target=target,
+                on_state=on_state,
+                on_close=on_close,
+                reporter=self._client.report,
+                open_timeout=self._client._http.timeout.connect,
+            )
+            self._profiles.add(profile)
+            self._client._profiles.add(profile)
+            await profile._start()
+            return profile
+
+    async def _finish_close(self) -> None:
         self._closed = True
         self._state_id = None
+        results = await asyncio.gather(
+            *(profile.aclose() for profile in tuple(self._profiles)),
+            return_exceptions=True,
+        )
+        for result in results:
+            if isinstance(result, BaseException):
+                raise result
+
+    async def aclose(self) -> None:
+        if self._close_task is None:
+            self._close_task = asyncio.create_task(self._finish_close())
+        try:
+            await asyncio.shield(self._close_task)
+        except asyncio.CancelledError:
+            await self._close_task
+            raise
 
     async def __aenter__(self) -> "NullgateSessionAsync":
         if self.is_closed:

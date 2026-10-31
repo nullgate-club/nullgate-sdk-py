@@ -223,3 +223,47 @@ def test_local_discovery_checks_filtered_candidates_without_deduplicating() -> N
 def test_page_requires_an_absolute_http_url(url: str) -> None:
     with pytest.raises(ValueError):
         Page(url, "")
+
+
+def test_tmx_cross_origin_queries_preserve_cross_provider_ambiguity() -> None:
+    from nullgate import ThreatMetrix
+
+    page = Page(
+        "https://target.example/login",
+        '<script src="/sensor"></script>'
+        '<script src="https://arbitrary.example/fp/tags.js?org_id=org'
+        '&amp;session_id=actual%2Fsession"></script>'
+        '<script src="/fp/tags.js?org_id=org&amp;org_id=again'
+        '&amp;session_id=session"></script>'
+        '<script src="/fp/tags.js?org_id=org&amp;session_id="></script>'
+        '<script src="/fp/tags.js?org_id=org&amp;session_id=session'
+        '&amp;session_id=again"></script>',
+    )
+    with pytest.raises(AmbiguousProtectionError):
+        find_protections(page)
+    found = find_protections(page, panic=False)
+    assert [type(item) for item in found] == [Sensor, ThreatMetrix]
+    [protection] = find_protections(page, where=F.provider == "threatmetrix")
+    assert isinstance(protection, ThreatMetrix)
+    assert protection.page is page
+    assert protection.script_url == (
+        "https://arbitrary.example/fp/tags.js?org_id=org&session_id=actual%2Fsession"
+    )
+    assert protection.provenance is not None
+    assert protection.provenance.tag_index == 1
+
+
+def test_module_tags_are_active_without_expanding_akamai_classic_discovery() -> None:
+    from nullgate import ThreatMetrix
+
+    page = Page(
+        "https://target.example/document",
+        '<script type="module" src="/not-an-akamai-sensor"></script>'
+        '<script type="module" src="https://tags.example/fp/tags.js'
+        '?org_id=org&amp;session_id=session"></script>'
+        '<script type="application/json" src="/fp/tags.js'
+        '?org_id=org&amp;session_id=inert"></script>',
+    )
+    [protection] = find_protections(page)
+    assert isinstance(protection, ThreatMetrix)
+    assert protection.script_url.endswith("session_id=session")

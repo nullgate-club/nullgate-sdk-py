@@ -15,32 +15,19 @@ def test_explicit_fields_preserve_order_and_hide_utf16_values() -> None:
 
     prepared = prepare_inputs(fields)
 
-    assert prepared == [
-        {
-            "attributes": {"name": "credential", "type": "password"},
-            "value": {
-                "length": 4,
-                "hash": sha256(bytes.fromhex("73003dd811dd2600")).hexdigest(),
-                "counts": (4, 3, 1, 0),
-            },
-        },
-        {
-            "attributes": {"name": "surrogate"},
-            "value": {
-                "length": 1,
-                "hash": sha256(b"\x00\xd8").hexdigest(),
-                "counts": (1, 1, 0, 0),
-            },
-        },
-        {
-            "attributes": {"name": "missing"},
-            "value": {
-                "length": 0,
-                "hash": sha256(b"").hexdigest(),
-                "counts": (0, 0, 0, 0),
-            },
-        },
+    assert [field["attributes"]["name"] for field in prepared] == [
+        "credential",
+        "surrogate",
+        "missing",
     ]
+    assert [field["value"]["length"] for field in prepared] == [4, 1, 0]
+    assert [field["value"]["hash"] for field in prepared] == [
+        sha256(bytes.fromhex("73003dd811dd2600")).hexdigest(),
+        sha256(b"\x00\xd8").hexdigest(),
+        sha256(b"").hexdigest(),
+    ]
+    assert all("value" not in field["attributes"] for field in prepared)
+    assert "s🔑&" not in repr(prepared)
     assert fields[0]["value"] == "s🔑&"
     assert fields[1]["value"] == "\ud800"
     assert list(prepared[0]["attributes"]) == ["name", "type"]
@@ -63,3 +50,29 @@ def test_counts_match_source_unicode_and_ascii_boundaries(
 ) -> None:
     prepared = prepare_inputs([{"id": "entry", "value": value}])
     assert prepared[0]["value"]["counts"] == counts
+
+
+@pytest.mark.parametrize(
+    ("text", "hash31", "trimmed_hash31", "trimmed_length"),
+    [
+        ("", 0, 0, 0),
+        ("A_9 😀İ\u00a0", -902761640, 386520648, 7),
+        ("\u0085\ufeff", 69402, 133, 1),
+        ("\ufeff\u00a0😀 \u0085\tX\u3000\ufeff", -2113306057, 927999095, 6),
+        (" \0 ", 30784, 0, 1),
+        ("\u180ex\u200b", 5929761, 5929761, 3),
+        ("\ud800", 55296, 55296, 1),
+    ],
+)
+def test_hash_facts_match_native_ecmascript_utf16_and_trim(
+    text,
+    hash31,
+    trimmed_hash31,
+    trimmed_length,
+):
+    value = prepare_inputs([{"value": text}])[0]["value"]
+    assert (value["hash31"], value["trimmed_hash31"], value["trimmed_length"]) == (
+        hash31,
+        trimmed_hash31,
+        trimmed_length,
+    )

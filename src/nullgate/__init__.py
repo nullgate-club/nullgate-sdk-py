@@ -2,7 +2,6 @@
 
 from magic_filter import F
 
-from .akamai import Protection
 from .client import (
     NullgateAPIError,
     NullgateClient,
@@ -10,9 +9,20 @@ from .client import (
     NullgateSession,
     NullgateSessionAsync,
 )
-from .html import AmbiguousProtectionError
+from .html import AmbiguousProtectionError, Protection
 from .models import Page, ScriptReference
+from .profile import (
+    Profile,
+    ProfileAsync,
+    ProfileClosedError,
+    ProfileError,
+    ProfileProtocolError,
+    ProfileServiceError,
+    ProfileTransportError,
+)
 from .solution import Solution, SolutionAsync
+from .target import Target, TargetRequest, TargetResponse, WreqTarget
+from .threatmetrix import ThreatMetrix, ThreatMetrixParams
 
 __all__ = [
     "AmbiguousProtectionError",
@@ -23,8 +33,21 @@ __all__ = [
     "NullgateSession",
     "NullgateSessionAsync",
     "Page",
+    "Profile",
+    "ProfileAsync",
+    "ProfileClosedError",
+    "ProfileError",
+    "ProfileProtocolError",
+    "ProfileServiceError",
+    "ProfileTransportError",
     "Protection",
     "ScriptReference",
     "Solution",
     "SolutionAsync",
+    "Target",
+    "TargetRequest",
+    "TargetResponse",
+    "ThreatMetrix",
+    "ThreatMetrixParams",
+    "WreqTarget",
 ]

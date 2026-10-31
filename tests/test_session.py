@@ -2,6 +2,7 @@ import asyncio
 import json
 from concurrent.futures import ThreadPoolExecutor
 from threading import Barrier, Lock
+from time import time_ns
 from uuid import UUID
 
 import httpx
@@ -108,13 +109,9 @@ def test_sessions_keep_identity_headers_timezone_and_lifetime_separate(
             client.open(identity=IDENTITY_A, user_agent="UA-A")
 
     asyncio.run(run_async()) if asynchronous else run_sync()
-    assert [request.headers.get("X-State-ID") for request in seen] == [
-        None,
-        None,
-        "UA-A-state",
-        "UA-B-state",
-        None,
-    ]
+    states = [request.headers["X-State-ID"] for request in seen]
+    assert len({states[0], states[1], states[4]}) == 3
+    assert states[2:4] == ["UA-A-state", "UA-B-state"]
     assert [request.headers["User-Agent"] for request in seen] == [
         "UA-A",
         "UA-B",
@@ -199,7 +196,9 @@ def test_sync_sessions_overlap_independently_and_serialize_their_own_requests() 
                 for future in futures:
                     future.result(timeout=10)
     assert any(overlap)
-    assert states == {"UA-A": [None, "UA-A-1"], "UA-B": [None]}
+    assert states["UA-A"][0] and states["UA-B"][0]
+    assert states["UA-A"][0] != states["UA-B"][0]
+    assert states["UA-A"][1:] == ["UA-A-1"]
 
 
 def test_async_sessions_overlap_independently_and_serialize_their_own_requests() -> (
@@ -232,7 +231,9 @@ def test_async_sessions_overlap_independently_and_serialize_their_own_requests()
                     first.solve(PARAMS), first.solve(PARAMS), second.solve(PARAMS)
                 )
         assert any(overlap)
-        assert states == {"UA-A": [None, "UA-A-1"], "UA-B": [None]}
+        assert states["UA-A"][0] and states["UA-B"][0]
+        assert states["UA-A"][0] != states["UA-B"][0]
+        assert states["UA-A"][1:] == ["UA-A-1"]
 
     asyncio.run(scenario())
 
@@ -287,3 +288,78 @@ def test_invalid_identity_is_rejected_before_request_allocation(
                 client.open(identity="not-a-uuid", user_agent="UA")
 
     asyncio.run(run_async()) if asynchronous else run_sync()
+
+
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+def test_document_observations_change_without_replacing_session_state(
+    asynchronous: bool,
+) -> None:
+    before = time_ns() // 1_000_000
+    page = Page(
+        "https://target.example/document",
+        '<script src="/first"></script><script src="/second"></script>',
+    )
+    next_page = Page(page.url, page.html)
+    after = time_ns() // 1_000_000
+    assert UUID(page.document_id).version == 4
+    assert next_page.document_id != page.document_id
+    assert before <= page.started_at_ms <= next_page.started_at_ms <= after
+    requests: list[httpx.Request] = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(
+            200,
+            json={"sensor_data": "generated", "headers": {}, "send_at": 0},
+            headers={"X-Request-ID": "1" * 32},
+        )
+
+    def params(client: NullgateClient | NullgateClientAsync) -> list[SensorParams]:
+        found = client.find_protections(page, panic=False)
+        assert all(item.page is page for item in found)
+        assert isinstance(found[0], Sensor) and isinstance(found[1], Sensor)
+        next_sensor = Sensor(next_page, found[0].script_url)
+        return [
+            SensorParams(sensor, "source")
+            for sensor in (found[0], found[1], next_sensor, found[0])
+        ]
+
+    def run_sync() -> None:
+        with NullgateClient("secret", transport=httpx.MockTransport(handle)) as client:
+            values = params(client)
+            with client.open(
+                identity=IDENTITY_A, user_agent="UA", timezone="Europe/Paris"
+            ) as session:
+                for value in values:
+                    session.solve(value)
+                with client.open(identity=IDENTITY_A, user_agent="UA") as independent:
+                    independent.solve(values[0])
+
+    async def run_async() -> None:
+        async with NullgateClientAsync(
+            "secret", transport=httpx.MockTransport(handle)
+        ) as client:
+            values = params(client)
+            async with client.open(
+                identity=IDENTITY_A, user_agent="UA", timezone="Europe/Paris"
+            ) as session:
+                for value in values:
+                    await session.solve(value)
+                async with client.open(
+                    identity=IDENTITY_A, user_agent="UA"
+                ) as independent:
+                    await independent.solve(values[0])
+
+    asyncio.run(run_async()) if asynchronous else run_sync()
+    states = [request.headers["X-State-ID"] for request in requests]
+    assert states[:4] == [states[0]] * 4
+    assert states[4] != states[0]
+    for index, request in enumerate(requests):
+        observed = next_page if index == 2 else page
+        website = json.loads(request.content)["website"]
+        assert website["document_id"] == observed.document_id
+        assert website["started_at_ms"] == observed.started_at_ms
+        assert request.url.path == f"/v1/{IDENTITY_A}/generate"
+        assert request.headers["User-Agent"] == "UA"
+        if index < 4:
+            assert json.loads(request.content)["timezone"] == "Europe/Paris"

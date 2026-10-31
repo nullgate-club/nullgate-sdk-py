@@ -1,13 +1,19 @@
-"""One generation with Python 3.11+, the SDK, and wreq==0.13.0."""
+"""One generation or profiling document with Python 3.11+ and wreq==0.13.0."""
 
 import asyncio
 import os
 from urllib.parse import urlsplit
 from uuid import uuid4
 
-from wreq import Client, Emulation, Jar, Platform, Profile, redirect
+from wreq import Client, Emulation, Jar, Platform, Profile, Proxy, redirect
 
-from nullgate import NullgateClientAsync, Page
+from nullgate import (
+    NullgateClientAsync,
+    Page,
+    ThreatMetrix,
+    ThreatMetrixParams,
+    WreqTarget,
+)
 from nullgate.akamai import Pixel, PixelParams, Sbsd, SbsdParams, Sensor, SensorParams
 
 USER_AGENT = (
@@ -18,16 +24,21 @@ USER_AGENT = (
 
 async def main() -> None:
     jar = Jar()
+    proxy = os.environ.get("TARGET_PROXY") or None
     target = Client(
         emulation=Emulation(Profile.Chrome146, Platform.Windows),
         user_agent=USER_AGENT,
         cookie_provider=jar,
-        no_proxy=True,
+        proxies=[Proxy.all(proxy)] if proxy else [],
+        no_proxy=proxy is None,
         redirect=redirect.Policy.none(),
     )
     client = NullgateClientAsync(
         os.environ["NULLGATE_API_KEY"],
         base_url=os.environ.get("NULLGATE_BASE_URL", "https://akamai.nullgate.club"),
+        profile_base_url=os.environ.get(
+            "NULLGATE_PROFILE_BASE_URL", "https://threatmetrix.nullgate.club"
+        ),
         analytics_url=os.environ.get(
             "ANALYTICS_URL", "https://analytics.nullgate.club"
         ),
@@ -43,6 +54,20 @@ async def main() -> None:
             response.raise_for_status()
             return
         [protection] = protections
+        if isinstance(protection, ThreatMetrix):
+            async with client.open(
+                identity=os.environ.get("NULLGATE_IDENTITY") or uuid4(),
+                user_agent=USER_AGENT,
+            ) as session:
+                async with await session.profile(
+                    ThreatMetrixParams(protection), WreqTarget(target, proxy=proxy)
+                ) as profile:
+                    print(
+                        f"Profiling startup delivered request_id={profile.request_id}"
+                    )
+                    # This example deliberately leaves the document here.
+                    await profile.pagehide()
+            return
         source = await target.get(protection.script_url, headers={"Referer": page.url})
         source.raise_for_status()
         script = await source.text()

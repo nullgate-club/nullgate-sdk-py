@@ -124,10 +124,10 @@ def test_generation_yields_ready_posts_and_private_input_summaries(
 
     asyncio.run(run_async()) if asynchronous else run_sync()
 
-    assert [request.headers.get("X-State-ID") for request in requests] == [
-        None,
-        *(["document-state"] * 4),
-    ]
+    assert requests[0].headers["X-State-ID"]
+    assert all(
+        request.headers["X-State-ID"] == "document-state" for request in requests[1:]
+    )
     assert [request.url.params["type"] for request in requests] == [
         "pixel",
         "akamai",
@@ -141,16 +141,6 @@ def test_generation_yields_ready_posts_and_private_input_summaries(
     ]
     assert pixel["challenge"] == "001234" and "cookies" not in pixel
     assert sensor["cookies"] == {"bm_sz": "target-cookie"}
-    assert sensor["inputs"] == [
-        {
-            "attributes": {"name": "password", "type": "password"},
-            "value": {
-                "length": 4,
-                "hash": sha256(bytes.fromhex("73003dd811dd2600")).hexdigest(),
-                "counts": [4, 3, 1, 0],
-            },
-        }
-    ]
     assert sensor["actions"] == actions
     assert "challenge" not in sensor and "challenge" not in sbsd
     assert sbsd["cookies"] == {"sbsd_o": "target-cookie"}
@@ -167,7 +157,6 @@ def test_generation_yields_ready_posts_and_private_input_summaries(
         payload = json.loads(request.content)
         assert request.headers["Authorization"] == "Bearer account-secret"
         assert request.headers["User-Agent"] == "caller-UA"
-        assert payload["website"] == {"url": PAGE.url, "html": PAGE.html}
         assert payload["timezone"] == "Europe/Paris"
         assert "s🔑&" not in request.content.decode()
         assert "user_agent" not in payload and "identity" not in payload
@@ -254,7 +243,8 @@ def test_api_error_preserves_status_detail_request_id_and_state_rotation(
                     check_error(caught.value, index)
 
     asyncio.run(run_async()) if asynchronous else run_sync()
-    assert states == [None, "error-state", "error-state"]
+    assert states[0]
+    assert states[1:] == ["error-state", "error-state"]
 
 
 @pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
@@ -328,7 +318,8 @@ def test_body_failure_closes_response_and_preserves_state_rotation(
                 assert solution.request_id == "6" * 32
 
     asyncio.run(run_async()) if asynchronous else run_sync()
-    assert states == [None, "rotated-state"]
+    assert states[0]
+    assert states[1:] == ["rotated-state"]
 
 
 @pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])

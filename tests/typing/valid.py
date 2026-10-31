@@ -10,9 +10,14 @@ from nullgate import (
     NullgateSession,
     NullgateSessionAsync,
     Page,
+    Profile,
+    ProfileAsync,
     Protection,
     Solution,
     SolutionAsync,
+    Target,
+    ThreatMetrix,
+    ThreatMetrixParams,
 )
 from nullgate.akamai import Pixel, PixelParams, Sbsd, SbsdParams, Sensor, SensorParams
 from nullgate.html import find_protections
@@ -69,3 +74,25 @@ async def async_consumer(client: NullgateClientAsync, page: Page, source: str) -
                         await session.solve(SbsdParams(protection, source)),
                         SolutionAsync,
                     )
+
+
+def sync_profile_consumer(client: NullgateClient, page: Page, target: Target) -> None:
+    with client.open(identity=UUID(int=1), user_agent="UA") as session:
+        for protection in client.find_protections(page, panic=False):
+            if isinstance(protection, ThreatMetrix):
+                with session.profile(ThreatMetrixParams(protection), target) as profile:
+                    assert_type(profile, Profile)
+                    profile.pagehide(persisted=True)
+
+
+async def async_profile_consumer(
+    client: NullgateClientAsync, page: Page, target: Target
+) -> None:
+    async with client.open(identity=UUID(int=1), user_agent="UA") as session:
+        for protection in client.find_protections(page, panic=False):
+            if isinstance(protection, ThreatMetrix):
+                async with await session.profile(
+                    ThreatMetrixParams(protection), target
+                ) as profile:
+                    assert_type(profile, ProfileAsync)
+                    await profile.pagehide(persisted=True)
