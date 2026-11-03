@@ -206,6 +206,14 @@ Input values are summarized locally; raw input/change action strings are rejecte
 before opening the paid socket. `None` omits a collection; explicit `[]` is sent
 as `[]`. No keystrokes or field observations are recorded automatically.
 
+Each input is a flat string map, for example
+`{"selector": "#login input[name=email]", "name": "email", "value": email}`.
+The optional reserved `selector` is sent at the top level of the prepared input,
+not in `attributes`, and is omitted when absent. It must match exactly one native
+`input` or `textarea`; any nonempty `id` or `name` must also match that element.
+A selector can be used without `id` or `name`; omitting it preserves the existing
+id/name binding. Raw values remain local and are replaced with summaries.
+
 ```python
 from nullgate import F, ThreatMetrix, ThreatMetrixParams, WreqTarget
 

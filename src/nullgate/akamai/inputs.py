@@ -28,6 +28,7 @@ class InputValue(TypedDict):
 class PreparedInput(TypedDict):
     attributes: dict[str, str]
     value: InputValue
+    selector: NotRequired[str]
 
 
 def prepare_inputs(inputs: Sequence[Mapping[str, str]]) -> list[PreparedInput]:
@@ -43,7 +44,9 @@ def prepare_inputs(inputs: Sequence[Mapping[str, str]]) -> list[PreparedInput]:
         prepared.append(
             {
                 "attributes": {
-                    key: value for key, value in field.items() if key != "value"
+                    key: value
+                    for key, value in field.items()
+                    if key not in ("value", "selector")
                 },
                 "value": {
                     "length": len(encoded_value) // 2,
@@ -60,6 +63,8 @@ def prepare_inputs(inputs: Sequence[Mapping[str, str]]) -> list[PreparedInput]:
                 },
             }
         )
+        if "selector" in field:
+            prepared[-1]["selector"] = field["selector"]
     return prepared
 
 
