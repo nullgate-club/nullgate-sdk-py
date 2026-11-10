@@ -13,6 +13,7 @@ from magic_filter import MagicFilter
 
 from .akamai import Params, PixelParams, SbsdParams, SensorParams
 from .akamai.inputs import _prepare_actions, prepare_inputs
+from .errors import ErrorInfo, _parse_error_info
 from .html import Protection, find_protections
 from .models import Page
 from .profile import (
@@ -38,15 +39,28 @@ class NullgateAPIError(httpx.HTTPStatusError):
         self.status_code = response.status_code
         self.request_id = response.headers.get("X-Request-ID")
         self.detail: object
+        self.error_info: ErrorInfo | None = None
         try:
             body = response.json()
         except ValueError:
             self.detail = response.text
         else:
             self.detail = body.get("detail", body) if isinstance(body, dict) else body
+            if isinstance(body, dict):
+                self.error_info = _parse_error_info(body.get("error"))
+        description = (
+            f"[{self.error_info.code}/{self.error_info.origin}] "
+            + (
+                "Target HTTP transport failed"
+                if self.error_info.code == "CLIENT_TRANSPORT_ERROR"
+                and self.error_info.origin == "client"
+                else "HTTP failure"
+            )
+            if self.error_info is not None
+            else "Unclassified Nullgate HTTP failure"
+        )
         super().__init__(
-            f"Nullgate HTTP {self.status_code}: {self.detail} "
-            f"(request_id={self.request_id})",
+            f"{description} (status={self.status_code}, request_id={self.request_id})",
             request=response.request,
             response=response,
         )
@@ -178,7 +192,11 @@ def _generate_request(
     params: Params,
 ) -> httpx.Request:
     operation, payload = _payload(params, timezone)
-    headers = {"Authorization": f"Bearer {api_key}", "User-Agent": user_agent}
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "User-Agent": user_agent,
+        "X-Nullgate-Error-Format": "1",
+    }
     if state_id is not None:
         headers["X-State-ID"] = state_id
     return httpx.Request(

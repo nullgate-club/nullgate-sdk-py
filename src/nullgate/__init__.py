@@ -9,6 +9,7 @@ from .client import (
     NullgateSession,
     NullgateSessionAsync,
 )
+from .errors import ErrorInfo, ErrorTarget, TransportCause
 from .html import AmbiguousProtectionError, Protection
 from .models import Page, ScriptReference
 from .profile import (
@@ -26,6 +27,8 @@ from .threatmetrix import ThreatMetrix, ThreatMetrixCollector, ThreatMetrixParam
 
 __all__ = [
     "AmbiguousProtectionError",
+    "ErrorInfo",
+    "ErrorTarget",
     "F",
     "NullgateAPIError",
     "NullgateClient",
@@ -50,5 +53,6 @@ __all__ = [
     "ThreatMetrix",
     "ThreatMetrixCollector",
     "ThreatMetrixParams",
+    "TransportCause",
     "WreqTarget",
 ]

@@ -19,6 +19,7 @@ from websockets.exceptions import InvalidStatus
 
 from ._turn import _TurnAllocation, _TurnServer
 from .akamai.inputs import _prepare_actions, prepare_inputs
+from .errors import ErrorInfo, _parse_error_info, _transport_cause
 from .target import Target, TargetRequest
 from .threatmetrix import ThreatMetrixCollector, ThreatMetrixParams
 
@@ -35,11 +36,31 @@ class ProfileError(Exception):
         *,
         request_id: str | None = None,
         status_code: int | None = None,
+        error_info: ErrorInfo | None = None,
+        target_error: BaseException | None = None,
     ) -> None:
         self.detail = detail
         self.request_id = request_id
         self.status_code = status_code
-        super().__init__(f"{detail} (status={status_code}, request_id={request_id})")
+        self.error_info = error_info
+        self.target_error = target_error
+        if error_info is not None:
+            description = (
+                "Target HTTP transport failed"
+                if error_info.code == "CLIENT_TRANSPORT_ERROR"
+                and error_info.origin == "client"
+                else "Profile failed"
+            )
+            description = f"[{error_info.code}/{error_info.origin}] {description}"
+        else:
+            description = (
+                "Unclassified profile HTTP failure"
+                if isinstance(self, ProfileServiceError)
+                else detail
+            )
+        super().__init__(
+            f"{description} (status={status_code}, request_id={request_id})"
+        )
 
 
 class ProfileServiceError(ProfileError):
@@ -223,6 +244,8 @@ class ProfileAsync:
         self._reporter = reporter
         self._open_timeout = open_timeout
         self._request_id: str | None = None
+        self._error_format = False
+        self._target_errors: dict[int, BaseException] = {}
         self._error: ProfileError | None = None
         self._websocket: ClientConnection | None = None
         self._runner: asyncio.Task[None] | None = None
@@ -302,6 +325,7 @@ class ProfileAsync:
             headers = {
                 "Authorization": f"Bearer {self._api_key}",
                 "User-Agent": self._user_agent,
+                "X-Nullgate-Error-Format": "1",
             }
             if self._state_id is not None:
                 headers["X-State-ID"] = self._state_id
@@ -321,10 +345,19 @@ class ProfileAsync:
                         diagnostic_id = _request_id(diagnostic_id)
                     except ValueError:
                         diagnostic_id = None
+                try:
+                    handshake_body = json.loads(exc.response.body)
+                except (ValueError, TypeError):
+                    handshake_body = None
                 raise ProfileServiceError(
                     "Profile handshake rejected",
                     status_code=exc.response.status_code,
                     request_id=diagnostic_id,
+                    error_info=_parse_error_info(
+                        handshake_body.get("error")
+                        if isinstance(handshake_body, dict)
+                        else None
+                    ),
                 ) from None
             await self._send(self._start_message)
             while not self._closing:
@@ -365,6 +398,7 @@ class ProfileAsync:
                 task.cancel()
             await asyncio.gather(*self._network, return_exceptions=True)
             self._ice_tasks.clear()
+            self._target_errors.clear()
             if self._websocket is not None:
                 with suppress(Exception):
                     await self._websocket.close()
@@ -375,7 +409,7 @@ class ProfileAsync:
         kind = message.get("type")
         if kind == "error":
             if not {"type", "status", "detail"} <= message.keys() or not (
-                message.keys() <= {"type", "status", "detail", "request_id"}
+                message.keys() <= {"type", "status", "detail", "request_id", "error"}
             ):
                 raise ValueError
             status, detail = message["status"], message["detail"]
@@ -393,12 +427,41 @@ class ProfileAsync:
                 and request_id != self._request_id
             ):
                 raise ValueError
-            raise ProfileServiceError(detail, status_code=status, request_id=request_id)
+            info = _parse_error_info(message.get("error"))
+            raise ProfileServiceError(
+                detail,
+                status_code=status,
+                request_id=request_id,
+                error_info=info,
+                target_error=(
+                    self._target_errors.get(info.command_id)
+                    if info is not None
+                    and info.code == "CLIENT_TRANSPORT_ERROR"
+                    and info.origin == "client"
+                    and info.command_id is not None
+                    else None
+                ),
+            )
         if kind == "hello":
-            if message.keys() != {"type", "state_id", "request_id"} or self._request_id:
+            if (
+                message.keys()
+                not in (
+                    {"type", "state_id", "request_id"},
+                    {"type", "state_id", "request_id", "error_format"},
+                )
+                or self._request_id
+                or (
+                    "error_format" in message
+                    and (
+                        type(message["error_format"]) is not int
+                        or message["error_format"] != 1
+                    )
+                )
+            ):
                 raise ValueError
             state = _text(message["state_id"])
             self._request_id = _request_id(message["request_id"])
+            self._error_format = message.get("error_format") == 1
             self._on_state(state)
             return
         if self._request_id is None:
@@ -481,14 +544,16 @@ class ProfileAsync:
         try:
             response = await self._target._fetch(request)
             received_at_ms = time_ns() // 1_000_000
-        except Exception:
-            await self._send(
-                {
-                    "type": "http.error",
-                    "id": operation_id,
-                    "detail": "Target request failed",
-                }
-            )
+        except Exception as exc:
+            self._target_errors[operation_id] = exc
+            message: dict[str, object] = {
+                "type": "http.error",
+                "id": operation_id,
+                "detail": "Target request failed",
+            }
+            if self._error_format:
+                message["error"] = _transport_cause(exc)._as_dict()
+            await self._send(message)
             return
         await self._send(
             {

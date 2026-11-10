@@ -167,6 +167,12 @@ values and solve again. For blocking SBSD, fetch the original page again and
 check the result. A new Akamai document needs a new session; reuse the identity
 and jar. TMX keeps service storage keys within its session across new Pages.
 
+Reuse the Nullgate client with `with` / `async with`, and nest document sessions
+and profiles inside its lifetime as above. Close your caller-owned target client
+separately. `X-State-ID` is SDK-managed server continuation, not the document ID,
+browser UUID or target cookie; do not share live state across unrelated
+documents/workers. Keep session operations sequential.
+
 ## Discovery
 
 `Page(url=..., html=...)` contains the document you fetched. Both client methods
@@ -298,6 +304,64 @@ Profiling has separate `ProfileServiceError`, `ProfileProtocolError`,
 `ProfileTransportError`, and `ProfileClosedError` exceptions, all inheriting
 `ProfileError` and retaining `request_id`, `status_code` (when known) and `detail`.
 They do not invent an HTTPX Response or a successful Solution.
+
+Both service error types also expose optional typed `error_info` (`ErrorInfo`,
+`ErrorTarget`, `TransportCause`). Handle the existing exception, not the text:
+
+```python
+from nullgate import NullgateAPIError, ProfileServiceError
+
+def describe_service_error(error: NullgateAPIError | ProfileServiceError) -> None:
+    info = error.error_info
+    print("request_id=", error.request_id, "status=", error.status_code)
+    if info is not None:
+        print("code=", info.code, "origin=", info.origin, "stage=", info.stage)
+        if info.target is not None:
+            print(info.target.role, info.target.method, info.target.host)
+        if info.cause is not None:
+            print("cause_kind=", info.cause.kind)
+```
+
+Catch these around `solve` / profile startup and active-profile checks.
+`CLIENT_TRANSPORT_ERROR` (`origin="client"`, `stage="target_http"`) means the
+ThreatMetrix SDK sent `http.error` because your target adapter could not return a
+valid response. Nullgate's compatibility `502` is **not a target HTTP 502** or
+proof of a Nullgate outage. The original local target exception is available
+privately as `target_error` only when metadata identifies the matching failed
+command; legacy or unrelated errors do not inherit it. Do not print its raw message.
+Return actual target HTTP responses, including `4xx`/`5xx`, unchanged. A failure
+of SDK → Nullgate transport is separate, as are genuine service/upstream errors.
+
+New SDKs negotiate `X-Nullgate-Error-Format: 1`; enriched profiling `http.error`
+is sent only after the server confirms it. Old clients keep the unchanged legacy
+wire. New clients work with old servers, but `error_info` may be `None`; retain
+the status/request ID and never infer this code from an untyped `502`.
+Unknown codes/causes are valid. Nullable `retryable` is a hint, not a retry loop.
+For invalid inputs or unsupported sources, inspect the page/source/params pairing;
+discovery alone does not prove support. Lost responses may follow billable work.
+
+For support, share SDK version, operation, UTC time, request ID, status, available
+code/origin/stage, target role/method/host and safe cause kind/type/code. Do not
+post keys, cookies, state IDs, proxy credentials, HAR files, private URLs,
+HTML/scripts, field values/hashes, solution bodies, raw `detail` or raw exceptions.
+See [diagnostics](https://docs.nullgate.club/en/diagnostics).
+
+### Sensor stopping is not acceptance
+
+Four sends do not guarantee `_abck` threshold `0`. `is_enough` tests only the
+ordinary-send stop condition; threshold `0` is a stop signal, not proof of target
+acceptance or successful credentials. Count completed target sensor responses in
+the current cookie generation, not `solve` calls; reset that count on a new
+nonnegative generation. An unavailable limit is not success.
+
+For explicit manual send-count experiments, repeat `session.solve(SensorParams(
+sensor, script, cookies=current_cookies))` in the same document, call
+`solution.wait()`, send its exact request through your target client, read the
+response and refresh cookies before the next solve (await both SDK calls in async
+code). This is an application-owned loop, not a `send_count` option, hidden retry
+or change to the normal cookie gate. More sends are not promised to help.
+Generation, a completed POST and actual protected-page/application acceptance
+are three different outcomes; even HTTP `200` can contain a block page.
 
 After an actual target failure, call `await solution.report()`,
 `await profile.report()` or `await client.report(request_id)`; omit `await` in sync

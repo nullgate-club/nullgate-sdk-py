@@ -486,3 +486,204 @@ def test_ice_release_during_allocate_closes_tcp_without_a_stale_observation() ->
                                 await disconnected.wait()
 
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("negotiated", [False, True])
+def test_target_failure_metadata_is_negotiated_and_preserves_local_error(
+    negotiated: bool,
+) -> None:
+    local_error = TimeoutError("https://user:private@target.example/?cookie=private")
+
+    async def fetch(request: TargetRequest) -> TargetResponse:
+        raise local_error
+
+    async def scenario() -> None:
+        async def handler(socket: ServerConnection) -> None:
+            assert socket.request is not None
+            assert socket.request.headers["X-Nullgate-Error-Format"] == "1"
+            await receive(socket)
+            greeting: dict[str, object] = {
+                "type": "hello",
+                "state_id": "state",
+                "request_id": REQUEST_ID,
+            }
+            if negotiated:
+                greeting["error_format"] = 1
+            await send(socket, **greeting)
+            await socket.send(json.dumps(http_operation(1)))
+            result = await receive(socket)
+            expected: dict[str, object] = {
+                "type": "http.error",
+                "id": 1,
+                "detail": "Target request failed",
+            }
+            if negotiated:
+                expected["error"] = {"kind": "timeout", "type": "TimeoutError"}
+            assert result == expected
+            assert "private" not in json.dumps(result)
+            error: dict[str, object] = {
+                "type": "error",
+                "status": 502,
+                "detail": "private legacy detail",
+                "request_id": REQUEST_ID,
+            }
+            if negotiated:
+                error["error"] = {
+                    "code": "CLIENT_TRANSPORT_ERROR",
+                    "origin": "client",
+                    "message": "Target transport failed",
+                    "retryable": None,
+                    "stage": "target_http",
+                    "command_id": 1,
+                    "target": {"role": "tags", "method": "GET", "host": "tags.example"},
+                    "cause": result["error"],
+                }
+            await send(socket, **error)
+            await socket.wait_closed()
+
+        async with serve(handler, "127.0.0.1", 0) as server:
+            endpoint = f"http://127.0.0.1:{server.sockets[0].getsockname()[1]}"
+            async with NullgateClientAsync("key", profile_base_url=endpoint) as client:
+                session = client.open(identity=UUID(int=1), user_agent="UA")
+                with pytest.raises(ProfileServiceError) as failure:
+                    await session.profile(PARAMS, Target(fetch, proxy=None))
+                error = failure.value
+                assert error.target_error is (local_error if negotiated else None)
+                assert error.__cause__ is None
+                assert "private" not in str(error)
+                assert "private" not in repr(error)
+                if negotiated:
+                    assert error.error_info is not None
+                    assert error.error_info.code == "CLIENT_TRANSPORT_ERROR"
+                    assert error.error_info.target is not None
+                    assert error.error_info.target.host == "tags.example"
+                else:
+                    assert error.error_info is None
+
+    asyncio.run(scenario())
+
+
+def test_malformed_error_metadata_does_not_replace_service_failure() -> None:
+    async def scenario() -> None:
+        async def handler(socket: ServerConnection) -> None:
+            await receive(socket)
+            await send(
+                socket,
+                type="error",
+                status=502,
+                detail="legacy failure",
+                request_id=REQUEST_ID,
+                error={
+                    "code": "FUTURE_ERROR",
+                    "origin": "service",
+                    "message": "safe",
+                    "retryable": None,
+                    "cause": {"kind": []},
+                },
+            )
+            await socket.wait_closed()
+
+        async with serve(handler, "127.0.0.1", 0) as server:
+            endpoint = f"http://127.0.0.1:{server.sockets[0].getsockname()[1]}"
+            async with NullgateClientAsync("key", profile_base_url=endpoint) as client:
+                session = client.open(identity=UUID(int=1), user_agent="UA")
+                with pytest.raises(ProfileServiceError) as failure:
+                    await session.profile(
+                        PARAMS,
+                        Target(lambda _: TargetResponse(200, {}, b""), proxy=None),
+                    )
+                assert failure.value.detail == "legacy failure"
+                assert failure.value.error_info is None
+                assert failure.value.status_code == 502
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    ("code", "origin", "command_id", "expected"),
+    [
+        ("CLIENT_TRANSPORT_ERROR", "client", 1, 1),
+        ("CLIENT_TRANSPORT_ERROR", "client", 2, 2),
+        ("CLIENT_TRANSPORT_ERROR", "client", 3, None),
+        ("UPSTREAM_ERROR", "upstream", 1, None),
+        ("CLIENT_TRANSPORT_ERROR", "service", 1, None),
+        ("CLIENT_TRANSPORT_ERROR", "client", None, None),
+        ("CLIENT_TRANSPORT_ERROR", "client", True, None),
+        ("CLIENT_TRANSPORT_ERROR", "client", 0, None),
+        ("CLIENT_TRANSPORT_ERROR", "client", "1", None),
+    ],
+)
+def test_concurrent_target_failures_require_exact_metadata(
+    code: str, origin: str, command_id: object, expected: int | None
+) -> None:
+    local_errors = {1: TimeoutError("private first"), 2: OSError("private second")}
+
+    async def scenario() -> None:
+        entered = 0
+        all_entered = asyncio.Event()
+
+        async def fetch(request: TargetRequest) -> TargetResponse:
+            nonlocal entered
+            entered += 1
+            if entered == 3:
+                all_entered.set()
+            await all_entered.wait()
+            operation_id = int(request.url.rsplit("/", 1)[1])
+            if operation_id in local_errors:
+                raise local_errors[operation_id]
+            return TargetResponse(502, {}, b"real target failure")
+
+        async def handler(socket: ServerConnection) -> None:
+            await receive(socket)
+            await send(
+                socket,
+                type="hello",
+                state_id="state",
+                request_id=REQUEST_ID,
+                error_format=1,
+            )
+            for operation_id in (1, 2, 3):
+                operation = http_operation(operation_id)
+                operation["request"]["url"] = f"https://tags.example/{operation_id}"
+                await socket.send(json.dumps(operation))
+            callbacks = {
+                result["id"]: result
+                for result in [
+                    await receive(socket),
+                    await receive(socket),
+                    await receive(socket),
+                ]
+            }
+            assert callbacks[1]["type"] == callbacks[2]["type"] == "http.error"
+            assert callbacks[3]["response"]["status"] == 502
+            await send(
+                socket,
+                type="error",
+                status=502,
+                detail="legacy service failure",
+                request_id=REQUEST_ID,
+                error={
+                    "code": code,
+                    "origin": origin,
+                    "message": "safe",
+                    "retryable": None,
+                    "command_id": command_id,
+                },
+            )
+            await socket.wait_closed()
+
+        async with serve(handler, "127.0.0.1", 0) as server:
+            endpoint = f"http://127.0.0.1:{server.sockets[0].getsockname()[1]}"
+            async with NullgateClientAsync("key", profile_base_url=endpoint) as client:
+                session = client.open(identity=UUID(int=1), user_agent="UA")
+                with pytest.raises(ProfileServiceError) as failure:
+                    await session.profile(PARAMS, Target(fetch, proxy=None))
+                error = failure.value
+                assert error.target_error is local_errors.get(expected)
+                assert error.status_code == 502
+                assert error.detail == "legacy service failure"
+                assert error.__cause__ is None
+                if type(command_id) is not int or command_id <= 0:
+                    assert error.error_info is None
+
+    asyncio.run(scenario())
