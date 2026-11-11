@@ -280,7 +280,7 @@ def test_password_html_is_refused_before_any_api_call(api, control):
 
 
 @pytest.mark.parametrize("operation", ["sensor", "fwcim"])
-def test_password_observations_and_raw_actions_are_refused(api, operation):
+def test_password_observations_are_refused(api, operation):
     calls, _ = api
     with Nullgate("test-key") as ng:
         page = ng.session(user_agent="browser").page(
@@ -293,13 +293,35 @@ def test_password_observations_and_raw_actions_are_refused(api, operation):
                 page.sensor(script="source", cookies={}, inputs={"password": "secret"})
             else:
                 page.fwcim(form="#login", timing=TIMING, inputs={"password": "secret"})
-        with pytest.raises(NullgateError):
-            page.sensor(
-                script="source",
-                cookies={},
-                actions=[{"type": "input", "value": "secret"}],
-            )
     assert not calls
+
+
+@pytest.mark.parametrize(
+    "action,rejected",
+    [
+        ({"type": "input", "value": "private"}, True),
+        ({"type": "change", "value": "private"}, True),
+        ({"type": "click", "value": "private"}, True),
+        ({"type": "custom", "value": ""}, True),
+        ({"value": "private"}, True),
+        ({"type": "click"}, False),
+        ({"type": "click", "value": None}, False),
+        ({"type": "click", "value": 0}, False),
+        ({"type": "input", "value": {"length": 0, "hash": "0" * 64}}, False),
+    ],
+)
+def test_sensor_rejects_string_action_values_for_any_event(api, action, rejected):
+    calls, _ = api
+    with Nullgate("test-key") as ng:
+        page = ng.session(user_agent="browser").page(URL, HTML)
+        if rejected:
+            with pytest.raises(NullgateError) as error:
+                page.sensor(script="source", cookies={}, actions=[action])
+            assert error.value.code == "invalid_actions"
+            assert not calls
+        else:
+            page.sensor(script="source", cookies={}, actions=[action])
+            assert json.loads(calls[0].content)["actions"] == [action]
 
 
 def test_amazon_observation_retains_v1_checksum_and_name_resolution(api):

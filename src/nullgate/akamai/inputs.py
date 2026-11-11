@@ -73,9 +73,7 @@ def _prepare_actions(
 ) -> list[dict[str, object]]:
     actions: list[dict[str, object]] = []
     for action in observations:
-        if action.get("type") in ("input", "change") and isinstance(
-            action.get("value"), str
-        ):
+        if isinstance(action.get("value"), str):
             raise TypeError(
                 "Raw action input values are not allowed; use a prepared InputValue"
             )
