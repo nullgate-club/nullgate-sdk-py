@@ -35,4 +35,4 @@ Use `from nullgate.aio import Nullgate` for async network methods and `await res
 Runnable scripts: `examples/akamai.py`, `examples/amazon.py`, `examples/threatmetrix.py`, `examples/kleinanzeigen.py`.
 Run development checks with `make check`.
 
-[Documentation and callback recipes](https://v2.nullgate.club)
+[Documentation and callback recipes](https://nullgate.club)
