@@ -48,7 +48,6 @@ def test_wire_body_matches_schema_and_continues_product_session(api, operation):
                 "submitted": True,
                 "referrer": "",
                 "inputs": [],
-                "actions": [],
             }
             schema = WIRE["amazon"]["components"]["schemas"]["FwcimRequest"]
             continued = "continued-session"
@@ -79,9 +78,7 @@ def test_wire_body_matches_schema_and_continues_product_session(api, operation):
                 "script_url": getattr(page, operation + "_url"),
             }
             if operation == "sensor":
-                expected_extra.update(
-                    cookies={"_abck": "a", "bm_sz": "b"}, inputs=[], actions=[]
-                )
+                expected_extra["cookies"] = {"_abck": "a", "bm_sz": "b"}
             elif operation == "sbsd":
                 expected_extra["cookies"] = {"bm_so": "so", "sbsd_o": "o", "bm_s": "s"}
             else:

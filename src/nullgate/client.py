@@ -2,7 +2,7 @@
 
 import asyncio
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from contextlib import AbstractContextManager
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -24,9 +24,13 @@ class Request:
     headers: dict[str, str]
     send_at: float
     request_id: str
+    _reporter: Callable[[str], bool] = field(repr=False, kw_only=True)
 
     def wait(self) -> None:
         time.sleep(max(0.0, self.send_at - time.time()))
+
+    def report(self) -> bool:
+        return self._reporter(self.request_id)
 
 
 @dataclass(frozen=True, slots=True)
@@ -35,9 +39,13 @@ class Fwcim:
     headers: dict[str, str]
     send_at: float
     request_id: str
+    _reporter: Callable[[str], bool] = field(repr=False, kw_only=True)
 
     def wait(self) -> None:
         time.sleep(max(0.0, self.send_at - time.time()))
+
+    def report(self) -> bool:
+        return self._reporter(self.request_id)
 
 
 class _SyncTransport(httpx.AsyncBaseTransport):
@@ -101,6 +109,9 @@ class Nullgate:
             ),
         )
 
+    def report(self, request_id: str) -> bool:
+        return self._loop.run(self._async.report(request_id))
+
     def account(self) -> dict[str, Any]:
         return self._loop.run(self._async.account())
 
@@ -140,8 +151,20 @@ class Session:
     def __init__(self, client: Nullgate, active: aio.Session) -> None:
         self._client, self._active = client, active
 
-    def page(self, url: str, html: str) -> "Page":
-        return Page(self._client, self._active.page(url, html))
+    def page(
+        self,
+        url: str,
+        html: str,
+        *,
+        document_id: UUID | str | None = None,
+        started_at_ms: int | None = None,
+    ) -> "Page":
+        return Page(
+            self._client,
+            self._active.page(
+                url, html, document_id=document_id, started_at_ms=started_at_ms
+            ),
+        )
 
 
 class Page:
@@ -179,15 +202,33 @@ class Page:
             )
         )
         return Request(
-            value.url, value.body, value.headers, value.send_at, value.request_id
+            value.url,
+            value.body,
+            value.headers,
+            value.send_at,
+            value.request_id,
+            _reporter=self._client.report,
         )
 
-    def pixel(self, *, script: str, script_url: str | None = None) -> Request:
+    def pixel(
+        self,
+        *,
+        script: str,
+        script_url: str | None = None,
+        challenge: str | None = None,
+    ) -> Request:
         value = self._client._loop.run(
-            self._active.pixel(script=script, script_url=script_url)
+            self._active.pixel(
+                script=script, script_url=script_url, challenge=challenge
+            )
         )
         return Request(
-            value.url, value.body, value.headers, value.send_at, value.request_id
+            value.url,
+            value.body,
+            value.headers,
+            value.send_at,
+            value.request_id,
+            _reporter=self._client.report,
         )
 
     def sbsd(
@@ -197,17 +238,25 @@ class Page:
             self._active.sbsd(script=script, cookies=cookies, script_url=script_url)
         )
         return Request(
-            value.url, value.body, value.headers, value.send_at, value.request_id
+            value.url,
+            value.body,
+            value.headers,
+            value.send_at,
+            value.request_id,
+            _reporter=self._client.report,
         )
 
     def fwcim(
         self,
         *,
-        form: str,
+        form: str | None = None,
         timing: Mapping[str, int],
-        inputs: aio.Inputs,
+        inputs: aio.Inputs | None = None,
         actions: Sequence[Mapping[str, object]] | None = None,
         cookies: object = None,
+        submitted: bool = True,
+        referrer: str = "",
+        history_length: int | None = None,
     ) -> Fwcim:
         value = self._client._loop.run(
             self._active.fwcim(
@@ -216,9 +265,18 @@ class Page:
                 inputs=inputs,
                 actions=actions,
                 cookies=cookies,
+                submitted=submitted,
+                referrer=referrer,
+                history_length=history_length,
             )
         )
-        return Fwcim(value.metadata1, value.headers, value.send_at, value.request_id)
+        return Fwcim(
+            value.metadata1,
+            value.headers,
+            value.send_at,
+            value.request_id,
+            _reporter=self._client.report,
+        )
 
     def threatmetrix(
         self,
@@ -227,8 +285,12 @@ class Page:
         script_url: str | None = None,
         collector: Mapping[str, str] | None = None,
         proxy: str | None = None,
+        inputs: aio.Inputs | None = None,
+        actions: Sequence[Mapping[str, object]] | None = None,
     ) -> AbstractContextManager[Profile]:
-        return _ProfileContext(self, send, script_url, collector, proxy)
+        return _ProfileContext(
+            self, send, script_url, collector, proxy, inputs, actions
+        )
 
 
 class _ProfileContext(AbstractContextManager[Profile]):
@@ -239,10 +301,17 @@ class _ProfileContext(AbstractContextManager[Profile]):
         script_url: str | None,
         collector: Mapping[str, str] | None,
         proxy: str | None,
+        inputs: aio.Inputs | None,
+        actions: Sequence[Mapping[str, object]] | None,
     ) -> None:
         self._client = page._client
         self._context = page._active.threatmetrix(
-            send=send, script_url=script_url, collector=collector, proxy=proxy
+            send=send,
+            script_url=script_url,
+            collector=collector,
+            proxy=proxy,
+            inputs=inputs,
+            actions=actions,
         )
 
     def __enter__(self) -> Profile:

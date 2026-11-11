@@ -3,8 +3,9 @@
 import asyncio
 import math
 import os
+import re
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -120,9 +121,13 @@ class Request:
     headers: dict[str, str]
     send_at: float
     request_id: str
+    _reporter: Callable[[str], Awaitable[bool]] = field(repr=False, kw_only=True)
 
     async def wait(self) -> None:
         await asyncio.sleep(max(0.0, self.send_at - time.time()))
+
+    async def report(self) -> bool:
+        return await self._reporter(self.request_id)
 
 
 @dataclass(frozen=True, slots=True)
@@ -131,9 +136,13 @@ class Fwcim:
     headers: dict[str, str]
     send_at: float
     request_id: str
+    _reporter: Callable[[str], Awaitable[bool]] = field(repr=False, kw_only=True)
 
     async def wait(self) -> None:
         await asyncio.sleep(max(0.0, self.send_at - time.time()))
+
+    async def report(self) -> bool:
+        return await self._reporter(self.request_id)
 
 
 class Nullgate:
@@ -235,6 +244,30 @@ class Nullgate:
             await asyncio.sleep(delay)
         raise AssertionError("Unreachable retry")
 
+    async def report(self, request_id: str) -> bool:
+        """Report HTTP delivery, not target acceptance or archive acceptance."""
+        if not isinstance(request_id, str) or not request_id.strip():
+            raise NullgateError("request_id must be nonempty", code="invalid_request")
+        if self._http.is_closed:
+            raise NullgateError("Nullgate is closed", code="closed")
+        request = httpx.Request(
+            "POST",
+            self._base_url + "/analytics/report",
+            json={"request_id": request_id},
+            extensions={"timeout": httpx.Timeout(min(3.0, self._timeout)).as_dict()},
+        )
+        try:
+            response = await self._http.send(request, auth=None, follow_redirects=False)
+        except (
+            httpx.TimeoutException,
+            httpx.NetworkError,
+            httpx.RemoteProtocolError,
+            httpx.ProxyError,
+            httpx.DecodingError,
+        ):
+            return False
+        return response.is_success
+
     async def account(self) -> dict[str, Any]:
         return await self._request("GET", "/account")
 
@@ -301,11 +334,27 @@ class Session:
             product: asyncio.Lock() for product in ("akamai", "amazon", "threatmetrix")
         }
 
-    def page(self, url: str, html: str) -> "Page":
+    def page(
+        self,
+        url: str,
+        html: str,
+        *,
+        document_id: UUID | str | None = None,
+        started_at_ms: int | None = None,
+    ) -> "Page":
         try:
-            document = Document(_url(url), html)
+            document = Document(
+                _url(url),
+                html,
+                document_id=str(UUID(str(document_id)))
+                if document_id is not None
+                else str(uuid4()),
+                started_at_ms=started_at_ms
+                if started_at_ms is not None
+                else time.time_ns() // 1_000_000,
+            )
             amazon._document(document)
-            return Page(self, document)
+            return Page(self, document, explicit_start=started_at_ms is not None)
         except (ValueError, TypeError) as exc:
             raise NullgateError(str(exc), code="invalid_page") from None
 
@@ -325,19 +374,38 @@ class Session:
 
 
 class Page:
-    def __init__(self, session: Session, document: Document) -> None:
+    def __init__(
+        self, session: Session, document: Document, *, explicit_start: bool = False
+    ) -> None:
         self._session = session
         self._document = document
-        self._candidates, self._pixel_challenges = discover(document)
+        self._explicit_start = explicit_start
+        self._candidates, self._pixel_challenges, self._pixel_urls = discover(document)
 
-    def _candidate(self, kind: str, script_url: str | None = None) -> Candidate | None:
+    def _candidate(
+        self, kind: str, script_url: str | None = None, challenge: str | None = None
+    ) -> Candidate | None:
         candidates = [
             c
             for c in self._candidates
             if c.kind == kind
             and (script_url is None or c.url == urljoin(self._document.url, script_url))
         ]
-        if kind == "pixel" and script_url is not None:
+        if kind == "pixel" and challenge is not None:
+            if (
+                not isinstance(challenge, str)
+                or re.fullmatch(r"\d+", challenge) is None
+            ):
+                raise NullgateError(
+                    "challenge must contain decimal digits", code="invalid_request"
+                )
+            urls = (
+                [_url(urljoin(self._document.url, script_url))]
+                if script_url is not None
+                else self._pixel_urls
+            )
+            candidates = [Candidate(kind, url, challenge) for url in urls]
+        elif kind == "pixel" and script_url is not None:
             url = _url(urljoin(self._document.url, script_url))
             candidates = [
                 Candidate(kind, url, challenge) for challenge in self._pixel_challenges
@@ -476,6 +544,21 @@ class Page:
         except (ValueError, TypeError, AttributeError) as exc:
             raise NullgateError(str(exc), code="invalid_inputs") from None
 
+    def _observations(
+        self,
+        inputs: Inputs | None,
+        actions: Sequence[Mapping[str, object]] | None,
+    ) -> dict[str, object]:
+        observations: dict[str, object] = {}
+        if inputs is not None:
+            observations["inputs"] = self._inputs(inputs)
+        if actions is not None:
+            try:
+                observations["actions"] = _prepare_actions(actions)
+            except (ValueError, TypeError) as exc:
+                raise NullgateError(str(exc), code="invalid_actions") from None
+        return observations
+
     async def _generate(
         self,
         kind: str,
@@ -485,8 +568,9 @@ class Page:
         cookies: object = None,
         inputs: Inputs | None = None,
         actions: Sequence[Mapping[str, object]] | None = None,
+        challenge: str | None = None,
     ) -> Request:
-        candidate = self._candidate(kind, script_url)
+        candidate = self._candidate(kind, script_url, challenge)
         if candidate is None:
             raise NullgateError(
                 f"No {kind} script found. Pass script_url", code="protection_not_found"
@@ -505,11 +589,7 @@ class Page:
                 )
                 payload["cookies"] = _cookies(cookies or {}, names, self._document.url)
             if kind == "sensor":
-                payload["inputs"] = self._inputs(inputs)
-                try:
-                    payload["actions"] = _prepare_actions(actions or [])
-                except (ValueError, TypeError) as exc:
-                    raise NullgateError(str(exc), code="invalid_actions") from None
+                payload.update(self._observations(inputs, actions))
             data = await session._client._request(
                 "POST", f"/akamai/{kind}", payload=payload
             )
@@ -530,6 +610,7 @@ class Page:
                     headers,
                     float(request["send_at"]),
                     data["request_id"],
+                    _reporter=session._client.report,
                 )
                 session._sessions["akamai"] = data["session"]
                 return result
@@ -556,8 +637,16 @@ class Page:
             script_url=script_url,
         )
 
-    async def pixel(self, *, script: str, script_url: str | None = None) -> Request:
-        return await self._generate("pixel", script=script, script_url=script_url)
+    async def pixel(
+        self,
+        *,
+        script: str,
+        script_url: str | None = None,
+        challenge: str | None = None,
+    ) -> Request:
+        return await self._generate(
+            "pixel", script=script, script_url=script_url, challenge=challenge
+        )
 
     async def sbsd(
         self, *, script: str, cookies: object, script_url: str | None = None
@@ -569,11 +658,14 @@ class Page:
     async def fwcim(
         self,
         *,
-        form: str,
+        form: str | None = None,
         timing: Mapping[str, int],
-        inputs: Inputs,
+        inputs: Inputs | None = None,
         actions: Sequence[Mapping[str, object]] | None = None,
         cookies: object = None,
+        submitted: bool = True,
+        referrer: str = "",
+        history_length: int | None = None,
     ) -> Fwcim:
         session = self._session
         try:
@@ -581,10 +673,19 @@ class Page:
                 self._document.url,
                 self._document.html,
                 document_id=self._document.document_id,
-                started_at_ms=timing["navigationStart"],
+                started_at_ms=(
+                    self._document.started_at_ms
+                    if self._explicit_start
+                    else timing["navigationStart"]
+                ),
             )
-            observations = cast(
-                list[amazon.InputObservation], self._inputs(inputs, amazon_inputs=True)
+            observations = (
+                cast(
+                    list[amazon.InputObservation],
+                    self._inputs(inputs, amazon_inputs=True),
+                )
+                if inputs is not None
+                else None
             )
             values = amazon._payload(
                 amazon._Params(
@@ -597,7 +698,10 @@ class Page:
                     ),
                     form_selector=form,
                     inputs=observations,
-                    actions=actions or [],
+                    actions=actions,
+                    submitted=submitted,
+                    referrer=referrer,
+                    history_length=history_length,
                 ),
                 session._timezone,
             )
@@ -618,6 +722,7 @@ class Page:
                     data["headers"],
                     float(data["send_at"]),
                     data["request_id"],
+                    _reporter=session._client.report,
                 )
                 session._sessions["amazon"] = data["session"]
                 return result
@@ -633,8 +738,12 @@ class Page:
         script_url: str | None = None,
         collector: Mapping[str, str] | None = None,
         proxy: str | None = None,
+        inputs: Inputs | None = None,
+        actions: Sequence[Mapping[str, object]] | None = None,
     ) -> AbstractAsyncContextManager[ProfileAsync]:
-        return _ProfileContext(self, send, script_url, collector, proxy)
+        return _ProfileContext(
+            self, send, script_url, collector, proxy, inputs, actions
+        )
 
 
 class _ProfileContext(AbstractAsyncContextManager[ProfileAsync]):
@@ -645,6 +754,8 @@ class _ProfileContext(AbstractAsyncContextManager[ProfileAsync]):
         script_url: str | None,
         collector: Mapping[str, str] | None,
         proxy: str | None,
+        inputs: Inputs | None,
+        actions: Sequence[Mapping[str, object]] | None,
     ) -> None:
         self._page, self._send, self._script_url, self._proxy = (
             page,
@@ -653,6 +764,7 @@ class _ProfileContext(AbstractAsyncContextManager[ProfileAsync]):
             proxy,
         )
         self._collector = collector
+        self._inputs, self._actions = inputs, actions
         self._active: ProfileAsync | None = None
 
     async def __aenter__(self) -> ProfileAsync:
@@ -676,6 +788,7 @@ class _ProfileContext(AbstractAsyncContextManager[ProfileAsync]):
         async with session._locks["threatmetrix"]:
             start = session._common(page._document, "threatmetrix")
             start.update(type="start", at_ms=time.time_ns() // 1_000_000, **entry)
+            start.update(page._observations(self._inputs, self._actions))
             parsed = urlsplit(session._client._base_url)
             url = urlunsplit(
                 (
@@ -705,6 +818,7 @@ class _ProfileContext(AbstractAsyncContextManager[ProfileAsync]):
                 on_state=on_state,
                 on_close=on_close,
                 open_timeout=session._client._timeout,
+                reporter=session._client.report,
             )
             self._active = active
             session._client._profiles.add(active)

@@ -33,6 +33,7 @@ Action `value` fields cannot contain strings, regardless of event type; sensor c
 Pass `transport=` to inject an HTTPX API transport (sync or async); it never handles target requests or ThreatMetrix sockets.
 Use `from nullgate import prepare_inputs, PreparedInput`; pass prepared `inputs` to sensor or FWCIM, including password summaries without raw values.
 Use `from nullgate.akamai import is_enough, abck_counters` to stop ordinary sensor sends; this does not prove target acceptance.
+Omitted `inputs`/`actions` preserve collection defaults; `[]` sends an explicitly empty collection. Call `result.report()` after a target failure; `True` means HTTP delivery only.
 
 Use `from nullgate.aio import Nullgate` for async network methods and `await result.wait()`.
 Runnable scripts: `examples/akamai.py`, `examples/amazon.py`, `examples/threatmetrix.py`, `examples/kleinanzeigen.py`.

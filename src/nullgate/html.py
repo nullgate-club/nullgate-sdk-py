@@ -86,7 +86,7 @@ def _is_uuid(value: str) -> bool:
         return False
 
 
-def discover(page: Page) -> tuple[list[Candidate], list[str]]:
+def discover(page: Page) -> tuple[list[Candidate], list[str], list[str]]:
     document = httpx.URL(page.url)
     parser = _Scripts(page.html)
     parser.feed(page.html)
@@ -98,6 +98,7 @@ def discover(page: Page) -> tuple[list[Candidate], list[str]]:
     if base.scheme not in {"http", "https"}:
         base = document
     found: list[Candidate] = []
+    pixel_urls: list[str] = []
     for reference, classic in parser.sources:
         try:
             urlsplit(reference.raw_source)
@@ -127,6 +128,7 @@ def discover(page: Page) -> tuple[list[Candidate], list[str]]:
         ):
             continue
         if _PIXEL_PATH.fullmatch(source.path):
+            pixel_urls.append(script_url)
             found.extend(
                 Candidate("pixel", script_url, challenge)
                 for challenge in parser.challenges
@@ -143,4 +145,8 @@ def discover(page: Page) -> tuple[list[Candidate], list[str]]:
             continue
         if source.path and not source.path.lower().endswith((".js", ".mjs", ".cjs")):
             found.append(Candidate("sensor", script_url))
-    return list(dict.fromkeys(found)), list(parser.challenges)
+    return (
+        list(dict.fromkeys(found)),
+        list(parser.challenges),
+        list(dict.fromkeys(pixel_urls)),
+    )

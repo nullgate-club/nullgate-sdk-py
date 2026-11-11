@@ -11,6 +11,10 @@ from nullgate.aio import Nullgate
 HTML = '<script src="https://risk.example/tags.js?org_id=org&amp;session_id=visit"></script>'
 URL = "https://shop.example/login"
 PROFILE = "00000000-0000-0000-0000-00000000004a"
+EMPTY_VALUE = {
+    "length": 0,
+    "hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+}
 
 
 async def send_json(socket, value):
@@ -473,6 +477,53 @@ def test_profile_startup_timeout_closes_unready_connection():
         ),
         *[
             (
+                HTML + '<input id="email"><input id="credential" type="password">',
+                observations,
+                {
+                    "tags_url": "https://risk.example/tags.js?org_id=org&session_id=visit",
+                    **expected,
+                },
+            )
+            for observations, expected in (
+                ({"inputs": None, "actions": None}, {}),
+                ({"inputs": [], "actions": []}, {"inputs": [], "actions": []}),
+                (
+                    {
+                        "inputs": [
+                            {"attributes": {"id": "credential"}, "value": EMPTY_VALUE}
+                        ]
+                    },
+                    {
+                        "inputs": [
+                            {"attributes": {"id": "credential"}, "value": EMPTY_VALUE}
+                        ]
+                    },
+                ),
+                (
+                    {"inputs": [{"id": "email", "value": ""}]},
+                    {
+                        "inputs": [
+                            {
+                                "attributes": {"id": "email"},
+                                "value": {
+                                    **EMPTY_VALUE,
+                                    "counts": [0, 0, 0, 0],
+                                    "hash31": 0,
+                                    "trimmed_hash31": 0,
+                                    "trimmed_length": 0,
+                                },
+                            }
+                        ]
+                    },
+                ),
+                (
+                    {"actions": [{"type": "click", "x": 0, "y": 0, "button": 0}]},
+                    {"actions": [{"type": "click", "x": 0, "y": 0, "button": 0}]},
+                ),
+            )
+        ],
+        *[
+            (
                 HTML
                 + '<script src="https://other.example/tags.js?org_id=o&session_id=s"></script>',
                 {"collector": collector},
@@ -528,7 +579,7 @@ def test_profile_entry_selection_sends_exactly_one_tags_url_or_collector(
 
                     with SyncNullgate("test-key", base_url=base_url) as ng:
                         page = ng.session(user_agent="browser", profile=PROFILE).page(
-                            URL, html
+                            URL, html, document_id=PROFILE, started_at_ms=1000
                         )
                         with page.threatmetrix(
                             send=lambda request: TargetResponse(200, {}, b""), **options
@@ -539,7 +590,7 @@ def test_profile_entry_selection_sends_exactly_one_tags_url_or_collector(
             else:
                 async with Nullgate("test-key", base_url=base_url) as ng:
                     page = ng.session(user_agent="browser", profile=PROFILE).page(
-                        URL, html
+                        URL, html, document_id=PROFILE, started_at_ms=1000
                     )
                     async with page.threatmetrix(
                         send=lambda request: TargetResponse(200, {}, b""), **options
@@ -555,8 +606,8 @@ def test_profile_entry_selection_sends_exactly_one_tags_url_or_collector(
             "user_agent": "browser",
             "url": URL,
             "html": html,
-            "document_id": start["document_id"],
-            "started_at_ms": start["started_at_ms"],
+            "document_id": PROFILE,
+            "started_at_ms": 1000,
             "at_ms": start["at_ms"],
             **entry,
         }
@@ -652,6 +703,41 @@ def test_invalid_profile_collector_is_rejected_before_connecting(
                     send=lambda request: TargetResponse(200, {}, b""), **options
                 ):
                     pytest.fail("Invalid collector entered a profile")
+            assert error.value.code == code
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize(
+    "options,code",
+    [
+        ({"inputs": {"credential": "private"}}, "invalid_inputs"),
+        (
+            {"inputs": [{"attributes": {"id": "credential"}, "value": "private"}]},
+            "invalid_inputs",
+        ),
+        ({"actions": [{"type": "click", "value": "private"}]}, "invalid_actions"),
+        ({"actions": [{"type": "input", "value": ""}]}, "invalid_actions"),
+    ],
+)
+def test_invalid_profile_observations_fail_before_opening_the_paid_socket(
+    monkeypatch, options, code
+):
+    async def unexpected_connect(*args, **kwargs):
+        pytest.fail("Invalid observations opened a profile socket")
+
+    monkeypatch.setattr("nullgate.profile.connect", unexpected_connect)
+
+    async def run():
+        async with Nullgate("test-key") as ng:
+            page = ng.session(user_agent="browser").page(
+                URL, HTML + '<input id="credential" type="password">'
+            )
+            with pytest.raises(NullgateError) as error:
+                async with page.threatmetrix(
+                    send=lambda request: TargetResponse(200, {}, b""), **options
+                ):
+                    pytest.fail("Invalid observations became ready")
             assert error.value.code == code
 
     asyncio.run(run())

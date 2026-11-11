@@ -191,6 +191,12 @@ def _payload(params: _Params, timezone: str | None) -> dict[str, object]:
     if not isinstance(params, _Params):
         raise TypeError("Invalid form observations")
     document = _document(params.page)
+    if type(params.submitted) is not bool or not isinstance(params.referrer, str):
+        raise ValueError("submitted must be a boolean and referrer must be a string")
+    if params.history_length is not None and (
+        type(params.history_length) is not int or params.history_length < 1
+    ):
+        raise ValueError("history_length must be a positive integer")
     timing = dict(params.performance_timing)
     if any(
         not isinstance(key, str) or type(value) is not int or value < 0

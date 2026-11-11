@@ -5,7 +5,7 @@ import base64
 import binascii
 import json
 import re
-from collections.abc import Callable, Coroutine, Mapping
+from collections.abc import Awaitable, Callable, Coroutine, Mapping
 from contextlib import suppress
 from threading import Event, Thread, current_thread
 from time import monotonic, time_ns
@@ -144,6 +144,7 @@ class ProfileAsync:
         on_state: Callable[[str], None],
         on_close: Callable[[], None],
         open_timeout: float,
+        reporter: Callable[[str], Awaitable[bool]],
     ) -> None:
         self._url = url
         self._api_key = api_key
@@ -152,6 +153,7 @@ class ProfileAsync:
         self._on_state = on_state
         self._on_close = on_close
         self._open_timeout = open_timeout
+        self._reporter = reporter
         self._request_id: str | None = None
         self._error: NullgateError | None = None
         self._websocket: ClientConnection | None = None
@@ -176,6 +178,9 @@ class ProfileAsync:
         if self._request_id is None:
             raise NullgateError("Profile has no request ID", code="protocol_error")
         return self._request_id
+
+    async def report(self) -> bool:
+        return await self._reporter(self.request_id)
 
     @property
     def is_closed(self) -> bool:
@@ -616,6 +621,9 @@ class Profile:
     @property
     def request_id(self) -> str:
         return self._active.request_id
+
+    def report(self) -> bool:
+        return self._loop.run(self._active.report())
 
     @property
     def is_closed(self) -> bool:
