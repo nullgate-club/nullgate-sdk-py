@@ -3,7 +3,7 @@
 Prepare protection requests. Your HTTP client sends them. Python 3.11+.
 
 ```sh
-pip install nullgate-sdk-py
+pip install git+https://github.com/nullgate-club/nullgate-sdk-py
 export NULLGATE_API_KEY=ng_your_key
 export TARGET_URL=https://your-target.example/login
 ```
