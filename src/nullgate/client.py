@@ -1,5 +1,6 @@
 """Synchronous facade over the async implementation and its owned event loop."""
 
+import asyncio
 import time
 from collections.abc import Mapping, Sequence
 from contextlib import AbstractContextManager
@@ -8,6 +9,8 @@ from datetime import datetime
 from types import TracebackType
 from typing import Any, Self
 from uuid import UUID
+
+import httpx
 
 from . import aio
 from .profile import Profile, _ProfileLoop
@@ -37,6 +40,35 @@ class Fwcim:
         time.sleep(max(0.0, self.send_at - time.time()))
 
 
+class _SyncTransport(httpx.AsyncBaseTransport):
+    def __init__(self, transport: httpx.BaseTransport) -> None:
+        self._transport = transport
+
+    async def __aenter__(self) -> Self:
+        await asyncio.to_thread(self._transport.__enter__)
+        return self
+
+    def _send(self, request: httpx.Request) -> httpx.Response:
+        response = self._transport.handle_request(request)
+        try:
+            response.read()
+        finally:
+            response.close()
+        response.stream = httpx.ByteStream(response.content)
+        return response
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        work = asyncio.create_task(asyncio.to_thread(self._send, request))
+        try:
+            return await asyncio.shield(work)
+        except asyncio.CancelledError:
+            await asyncio.gather(work, return_exceptions=True)
+            raise
+
+    async def aclose(self) -> None:
+        await asyncio.to_thread(self._transport.close)
+
+
 class Nullgate:
     def __init__(
         self,
@@ -44,8 +76,14 @@ class Nullgate:
         *,
         base_url: str = "https://api.nullgate.club",
         timeout: float = 30,
+        transport: httpx.BaseTransport | None = None,
     ) -> None:
-        self._async = aio.Nullgate(api_key, base_url=base_url, timeout=timeout)
+        self._async = aio.Nullgate(
+            api_key,
+            base_url=base_url,
+            timeout=timeout,
+            transport=_SyncTransport(transport) if transport is not None else None,
+        )
         self._loop = _ProfileLoop()
         self._closed = False
 
@@ -86,6 +124,7 @@ class Nullgate:
                 self._closed = True
 
     def __enter__(self) -> Self:
+        self._loop.run(self._async.__aenter__())
         return self
 
     def __exit__(

@@ -1,11 +1,22 @@
 from typing import assert_type
 
-from nullgate import Nullgate, NullgateError, TargetRequest, TargetResponse
+from nullgate import (
+    Nullgate,
+    NullgateError,
+    PreparedInput,
+    TargetRequest,
+    TargetResponse,
+    prepare_inputs,
+)
 from nullgate.aio import Nullgate as AsyncNullgate
 
 
 def sync_example(ng: Nullgate, html: str) -> None:
     page = ng.session(user_agent="browser").page("https://shop.example", html)
+    prepared = prepare_inputs([{"id": "password", "value": "local-only"}])
+    assert_type(prepared, list[PreparedInput])
+    page.sensor(script="source", cookies={}, inputs=prepared)
+    page.fwcim(form="#signin", timing={"navigationStart": 1}, inputs=prepared)
     assert_type(page.sensor_url, str | None)
     request = page.sensor(script="source", cookies={"_abck": "value"})
     assert_type(request.body, str)
@@ -14,6 +25,9 @@ def sync_example(ng: Nullgate, html: str) -> None:
 
 async def async_example(ng: AsyncNullgate, html: str) -> None:
     page = ng.session(user_agent="browser").page("https://shop.example", html)
+    prepared = prepare_inputs([{"id": "password", "value": "local-only"}])
+    await page.sensor(script="source", cookies={}, inputs=prepared)
+    await page.fwcim(form="#signin", timing={"navigationStart": 1}, inputs=prepared)
     request = await page.sensor(script="source", cookies={})
     await request.wait()
 

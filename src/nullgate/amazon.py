@@ -1,7 +1,6 @@
 """Public Amazon observations only; no JavaScript or credential submission."""
 
 import math
-import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from struct import iter_unpack
@@ -12,7 +11,12 @@ import soupsieve
 from bs4 import BeautifulSoup, Tag
 from bs4.element import NavigableString
 
-from .akamai.inputs import InputValue, _prepare_actions, prepare_inputs
+from .akamai.inputs import (
+    InputValue,
+    _prepare_actions,
+    _validate_summary,
+    prepare_inputs,
+)
 from .models import Page
 
 
@@ -127,37 +131,6 @@ def _input_node(
     ):
         raise ValueError("Input must match exactly one input or textarea")
     return candidates[0]
-
-
-def _validate_summary(value: InputValue) -> None:
-    if (
-        not isinstance(value, dict)
-        or not value.keys()
-        <= {
-            "length",
-            "hash",
-            "counts",
-            "hash31",
-            "trimmed_hash31",
-            "trimmed_length",
-        }
-        or type(value.get("length")) is not int
-        or value["length"] < 0
-        or not isinstance(value.get("hash"), str)
-        or re.fullmatch(r"[0-9a-f]{64}", value["hash"]) is None
-    ):
-        raise ValueError("Input value must be a redacted summary")
-    statistics = cast(Mapping[str, object], value)
-    for key in ("hash31", "trimmed_hash31", "trimmed_length"):
-        if key in statistics and type(statistics[key]) is not int:
-            raise ValueError("Input summary statistics must be integers")
-    counts = value.get("counts")
-    if counts is not None and (
-        not isinstance(counts, (tuple, list))
-        or len(counts) != 4
-        or any(type(count) is not int or count < 0 for count in counts)
-    ):
-        raise ValueError("Input summary counts must be four nonnegative integers")
 
 
 def observe_input(

@@ -16,7 +16,7 @@ from uuid import UUID, uuid4
 import httpx
 
 from . import amazon
-from .akamai.inputs import _prepare_actions, prepare_inputs
+from .akamai.inputs import _prepare_actions, _prepared_input, prepare_inputs
 from .errors import NullgateError, _retry_after
 from .html import Candidate, discover
 from .models import Page as Document
@@ -143,6 +143,7 @@ class Nullgate:
         *,
         base_url: str = "https://api.nullgate.club",
         timeout: float = 30,
+        transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         key = os.environ.get("NULLGATE_API_KEY") if api_key is None else api_key
         if not key or not key.strip() or any(char in key for char in "\r\n"):
@@ -162,7 +163,10 @@ class Nullgate:
         self._key = key
         self._timeout = timeout
         self._http = httpx.AsyncClient(
-            timeout=timeout, trust_env=False, follow_redirects=False
+            timeout=timeout,
+            transport=transport,
+            trust_env=False,
+            follow_redirects=False,
         )
         self._profiles: set[ProfileAsync] = set()
 
@@ -255,6 +259,7 @@ class Nullgate:
         await self._http.aclose()
 
     async def __aenter__(self) -> Self:
+        await self._http.__aenter__()
         return self
 
     async def __aexit__(
@@ -379,6 +384,36 @@ class Page:
             else:
                 fields = list(inputs or [])
             for raw in fields:
+                if "attributes" in raw or isinstance(raw.get("value"), Mapping):
+                    if amazon_inputs:
+                        if not raw.keys() <= {
+                            "attributes",
+                            "value",
+                            "selector",
+                            "checksum",
+                            "geometry",
+                            "text",
+                        }:
+                            raise ValueError("Unsupported prepared Amazon input fields")
+                        base = _prepared_input(
+                            {
+                                key: item
+                                for key, item in raw.items()
+                                if key in {"attributes", "value", "selector"}
+                            }
+                        )
+                        observation_data: dict[str, object] = dict(base)
+                        observation_data.update(
+                            {
+                                key: raw[key]
+                                for key in ("checksum", "geometry", "text")
+                                if key in raw
+                            }
+                        )
+                        observations.append(observation_data)
+                    else:
+                        observations.append(dict(_prepared_input(raw)))
+                    continue
                 field = dict(raw)
                 value = field.pop("value", "")
                 if not isinstance(value, str):

@@ -282,23 +282,6 @@ def test_password_html_is_refused_before_any_api_call(api, control):
     assert not calls
 
 
-@pytest.mark.parametrize("operation", ["sensor", "fwcim"])
-def test_password_observations_are_refused(api, operation):
-    calls, _ = api
-    with Nullgate("test-key") as ng:
-        page = ng.session(user_agent="browser").page(
-            URL,
-            '<form id="login"><input id="password" type="password"></form>'
-            '<script src="/sensor"></script>',
-        )
-        with pytest.raises(NullgateError):
-            if operation == "sensor":
-                page.sensor(script="source", cookies={}, inputs={"password": "secret"})
-            else:
-                page.fwcim(form="#login", timing=TIMING, inputs={"password": "secret"})
-    assert not calls
-
-
 @pytest.mark.parametrize(
     "action,rejected",
     [

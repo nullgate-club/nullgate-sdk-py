@@ -40,7 +40,9 @@ def api(monkeypatch):
         return httpx.Response(200, json=body)
 
     def client(*args, **kwargs):
-        return original(*args, **kwargs, transport=httpx.MockTransport(handler))
+        if kwargs.get("transport") is None:
+            kwargs["transport"] = httpx.MockTransport(handler)
+        return original(*args, **kwargs)
 
     monkeypatch.setattr(httpx, "AsyncClient", client)
     return calls, replies
