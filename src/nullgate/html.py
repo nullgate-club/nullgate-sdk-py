@@ -1,27 +1,24 @@
-"""Discover supported protection candidates without fetching or executing sources."""
+"""Local script discovery, using the v1 HTML heuristics."""
 
 import re
+from dataclasses import dataclass
 from html.parser import HTMLParser
-from typing import TypeAlias
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urlsplit
 from uuid import UUID
 
 import httpx
-from magic_filter import MagicFilter
 
-from .akamai import Pixel, Sbsd, Sensor
-from .akamai import Protection as AkamaiProtection
 from .models import Page, ScriptReference
-from .threatmetrix import ThreatMetrix, ThreatMetrixCollector
 
 _PIXEL_CHALLENGE = re.compile(r"""\bbazadebezolkohpepadr\s*=\s*(['"])([0-9]+)\1""")
 _PIXEL_PATH = re.compile(r"/akam/13/[0-9a-fA-F]+")
 
-Protection: TypeAlias = AkamaiProtection | ThreatMetrix | ThreatMetrixCollector
 
-
-class AmbiguousProtectionError(ValueError):
-    """More than one protection candidate remains after local filtering."""
+@dataclass(frozen=True)
+class Candidate:
+    kind: str
+    url: str
+    challenge: str | None = None
 
 
 class _Scripts(HTMLParser):
@@ -89,17 +86,7 @@ def _is_uuid(value: str) -> bool:
         return False
 
 
-def find_protections(
-    page: Page, where: MagicFilter | None = None, *, panic: bool = True
-) -> list[Protection]:
-    """Discover candidates, raising on ambiguity unless panic=False.
-
-    Sensor discovery uses the existing same-origin extensionless classic-script
-    heuristic. It does not prove a script's contents; the service validates the
-    caller-supplied source. TMX uses the actual tags.js query, across origins.
-    """
-    if where is not None and not isinstance(where, MagicFilter):
-        raise TypeError("where must be a MagicFilter expression")
+def discover(page: Page) -> tuple[list[Candidate], list[str]]:
     document = httpx.URL(page.url)
     parser = _Scripts(page.html)
     parser.feed(page.html)
@@ -110,7 +97,7 @@ def find_protections(
         base = document
     if base.scheme not in {"http", "https"}:
         base = document
-    found: list[Protection] = []
+    found: list[Candidate] = []
     for reference, classic in parser.sources:
         try:
             urlsplit(reference.raw_source)
@@ -118,50 +105,42 @@ def find_protections(
         except (ValueError, httpx.InvalidURL):
             continue
         script_url = str(source)
-        if source.scheme not in {"http", "https"} or not source.host:
+        if (
+            source.scheme not in {"http", "https"}
+            or not source.host
+            or source.username
+            or source.password
+        ):
             continue
         if source.path.endswith("/tags.js"):
-            try:
-                found.append(ThreatMetrix(page, script_url, provenance=reference))
-            except ValueError:
-                pass
+            query = parse_qs(source.query.decode(), keep_blank_values=True)
+            if all(
+                len(query.get(key, [])) == 1 and query[key][0]
+                for key in ("org_id", "session_id")
+            ):
+                found.append(Candidate("threatmetrix", script_url))
             continue
-        if not classic:
-            continue
-        if (source.scheme, source.host, source.port) != (
+        if not classic or (source.scheme, source.host, source.port) != (
             document.scheme,
             document.host,
             document.port,
         ):
             continue
         if _PIXEL_PATH.fullmatch(source.path):
-            for challenge, offset in parser.challenges.items():
-                found.append(
-                    Pixel(
-                        page,
-                        script_url,
-                        challenge,
-                        provenance=reference,
-                        challenge_offset=offset,
-                    )
-                )
+            found.extend(
+                Candidate("pixel", script_url, challenge)
+                for challenge in parser.challenges
+            )
             continue
-        query: dict[str, list[str]] = {}
+        query_parts: dict[str, list[str]] = {}
         for part in source.query.decode().split("&"):
             name, _, value = part.partition("=")
-            query.setdefault(name, []).append(value)
-        versions = query.get("v", [])
+            query_parts.setdefault(name, []).append(value)
+        versions = query_parts.get("v", [])
         if any(_is_uuid(version) for version in versions):
-            if len(versions) == 1 and len(query.get("t", [])) <= 1:
-                found.append(Sbsd(page, script_url, provenance=reference))
+            if len(versions) == 1 and len(query_parts.get("t", [])) <= 1:
+                found.append(Candidate("sbsd", script_url))
             continue
         if source.path and not source.path.lower().endswith((".js", ".mjs", ".cjs")):
-            found.append(Sensor(page, script_url, provenance=reference))
-    if where is not None:
-        found = [item for item in found if bool(where.resolve(item))]
-    if panic and len(found) > 1:
-        raise AmbiguousProtectionError(
-            f"Found {len(found)} protection candidates; use where to select one "
-            "or panic=False to inspect all candidates."
-        )
-    return found
+            found.append(Candidate("sensor", script_url))
+    return list(dict.fromkeys(found)), list(parser.challenges)

@@ -1,9 +1,7 @@
 """Public Amazon observations only; no JavaScript or credential submission."""
 
-import asyncio
 import math
 import re
-import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from struct import iter_unpack
@@ -16,15 +14,6 @@ from bs4.element import NavigableString
 
 from .akamai.inputs import InputValue, _prepare_actions, prepare_inputs
 from .models import Page
-
-__all__ = [
-    "FwcimParams",
-    "FwcimSolution",
-    "FwcimSolutionAsync",
-    "Geometry",
-    "InputObservation",
-    "observe_input",
-]
 
 
 class Geometry(TypedDict):
@@ -213,7 +202,7 @@ def observe_input(
 
 
 @dataclass(frozen=True, slots=True)
-class FwcimParams:
+class _Params:
     page: Page
     performance_timing: Mapping[str, int] = field(repr=False)
     cookies: Mapping[str, str] | None = field(default=None, repr=False)
@@ -225,9 +214,9 @@ class FwcimParams:
     history_length: int | None = None
 
 
-def _payload(params: FwcimParams, timezone: str | None) -> dict[str, object]:
-    if not isinstance(params, FwcimParams):
-        raise TypeError("fwcim requires FwcimParams")
+def _payload(params: _Params, timezone: str | None) -> dict[str, object]:
+    if not isinstance(params, _Params):
+        raise TypeError("Invalid form observations")
     document = _document(params.page)
     timing = dict(params.performance_timing)
     if any(
@@ -454,31 +443,3 @@ def _validate_action(action: Mapping[str, object]) -> None:
             raise ValueError(
                 "Action input_summary must be a redacted length/counts pair"
             )
-
-
-@dataclass(frozen=True, slots=True)
-class FwcimSolution:
-    metadata1: str = field(repr=False)
-    send_at: float
-    headers: dict[str, str]
-    request_id: str
-
-    def wait(self) -> None:
-        """Wait until the earliest caller-owned form submission time."""
-        delay = self.send_at - time.time()
-        if delay > 0:
-            time.sleep(delay)
-
-
-@dataclass(frozen=True, slots=True)
-class FwcimSolutionAsync:
-    metadata1: str = field(repr=False)
-    send_at: float
-    headers: dict[str, str]
-    request_id: str
-
-    async def wait(self) -> None:
-        """Wait until the earliest caller-owned form submission time."""
-        delay = self.send_at - time.time()
-        if delay > 0:
-            await asyncio.sleep(delay)

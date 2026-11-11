@@ -4,15 +4,12 @@ import asyncio
 import inspect
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Literal, TypeAlias
+from typing import Literal, TypeAlias
 from urllib.parse import urlsplit
 
 from python_socks import parse_proxy_url
 
-if TYPE_CHECKING:
-    import wreq
-    import wreq.blocking
-    from wreq import Request as WreqRequest
+from .errors import NullgateError
 
 
 @dataclass(frozen=True, slots=True)
@@ -33,14 +30,20 @@ class TargetResponse:
 
     def __post_init__(self) -> None:
         if type(self.status) is not int or not 100 <= self.status <= 599:
-            raise ValueError("TargetResponse.status must be an HTTP status")
+            raise NullgateError(
+                "TargetResponse.status must be an HTTP status", code="invalid_response"
+            )
         if not isinstance(self.body, bytes):
-            raise TypeError("TargetResponse.body must be bytes")
+            raise NullgateError(
+                "TargetResponse.body must be bytes", code="invalid_response"
+            )
         if not all(
             isinstance(name, str) and isinstance(value, str)
             for name, value in self.headers.items()
         ):
-            raise TypeError("TargetResponse.headers must contain strings")
+            raise NullgateError(
+                "TargetResponse.headers must contain strings", code="invalid_response"
+            )
 
 
 TargetFetch: TypeAlias = Callable[
@@ -113,79 +116,3 @@ class Target:
         if not isinstance(response, TargetResponse):
             raise TypeError("Target.fetch must return a TargetResponse")
         return response
-
-
-def _wreq_headers(headers: "wreq.HeaderMap") -> dict[str, str]:
-    result: dict[str, str] = {}
-    for key in headers.keys():
-        name = bytes(key).decode("ascii")
-        result[name] = ", ".join(
-            bytes(value).decode("latin-1") for value in headers.get_all(name)
-        )
-    return result
-
-
-class WreqTarget(Target):
-    """Optional wreq 0.13 adapter; never owns or reconfigures the supplied client.
-
-    Configure that client for the same explicit proxy/direct route. Request-level
-    fresh Jars isolate omit operations without touching its shared cookie store.
-    """
-
-    def __init__(
-        self, client: "wreq.Client | wreq.blocking.Client", *, proxy: str | None
-    ) -> None:
-        from wreq import Client, Jar, Method, redirect
-        from wreq.blocking import Client as BlockingClient
-
-        def options(request: TargetRequest) -> "WreqRequest":
-            headers = dict(request.headers)
-            if request.credentials == "omit":
-                headers = {
-                    name: value
-                    for name, value in headers.items()
-                    if name.lower() != "cookie"
-                }
-            kwargs: WreqRequest = {
-                "headers": headers,
-                "default_headers": False,
-                "redirect": redirect.Policy.none(),
-            }
-            if request.body is not None:
-                kwargs["body"] = request.body
-            if request.credentials == "omit":
-                kwargs["cookie_provider"] = Jar()
-            return kwargs
-
-        fetch: TargetFetch
-        if isinstance(client, Client):
-            async_client = client
-
-            async def fetch_async(request: TargetRequest) -> TargetResponse:
-                async with async_client.request(
-                    getattr(Method, request.method), request.url, **options(request)
-                ) as response:
-                    return TargetResponse(
-                        response.status.as_int(),
-                        _wreq_headers(response.headers),
-                        bytes(await response.bytes()),
-                    )
-
-            fetch = fetch_async
-        elif isinstance(client, BlockingClient):
-            blocking_client = client
-
-            def fetch_sync(request: TargetRequest) -> TargetResponse:
-                with blocking_client.request(
-                    getattr(Method, request.method), request.url, **options(request)
-                ) as response:
-                    return TargetResponse(
-                        response.status.as_int(),
-                        _wreq_headers(response.headers),
-                        bytes(response.bytes()),
-                    )
-
-            fetch = fetch_sync
-        else:
-            raise TypeError("WreqTarget requires a wreq Client or blocking.Client")
-        super().__init__(fetch, proxy=proxy)

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "nullgate-sdk-py"
-version = "0.1.0"
+version = "2.0.0"
 description = "Typed clients for Nullgate's supported protection generation APIs."
 readme = "README.md"
 requires-python = ">=3.11,<3.16"
@@ -12,7 +12,6 @@ dependencies = [
     "aioice==0.10.2",
     "beautifulsoup4>=4.14,<5",
     "httpx>=0.28,<1",
-    "magic-filter>=1.0.12,<2",
     "python-socks==2.8.0",
     "websockets>=15.0.1,<16",
 ]
@@ -35,15 +34,11 @@ Documentation = "https://docs.nullgate.club"
 Repository = "https://github.com/nullgate-club/nullgate-sdk-py"
 Issues = "https://github.com/nullgate-club/nullgate-sdk-py/issues"
 
-[project.optional-dependencies]
-wreq = ["wreq==0.13.0"]
-
 [dependency-groups]
 dev = [
     "ruff>=0.14",
     "mypy>=1.19",
     "pytest>=9",
-    "wreq==0.13.0",
 ]
 
 [tool.hatch.build]
@@ -58,6 +53,7 @@ include = [
     "/src/nullgate/**/*.py",
     "/src/nullgate/py.typed",
     "/tests/**/*.py",
+    "/tests/wire.json",
     "/examples/**/*.py",
     "/README.md",
     "/assets/logo.svg",

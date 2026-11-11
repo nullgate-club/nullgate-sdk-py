@@ -1,689 +1,458 @@
 import asyncio
-import base64
 import json
-from contextlib import suppress
-from typing import Any
 from uuid import UUID
 
 import pytest
-from aioice import stun
-from websockets.asyncio.server import ServerConnection, serve
+from websockets.asyncio.server import serve
 
-from nullgate import (
-    NullgateClient,
-    NullgateClientAsync,
-    Page,
-    ProfileClosedError,
-    ProfileProtocolError,
-    ProfileServiceError,
-    Target,
-    TargetRequest,
-    TargetResponse,
-    ThreatMetrix,
-    ThreatMetrixParams,
-)
+from nullgate import NullgateError, TargetResponse
+from nullgate.aio import Nullgate
 
-REQUEST_ID = str(UUID(int=20))
-PARAMS = ThreatMetrixParams(
-    ThreatMetrix(
-        Page("https://target.example/document", "<html></html>"),
-        "https://tags.example/fp/tags.js?org_id=org&session_id=target-session",
-    )
-)
+HTML = '<script src="https://risk.example/tags.js?org_id=org&amp;session_id=visit"></script>'
+URL = "https://shop.example/login"
+PROFILE = "00000000-0000-0000-0000-00000000004a"
 
 
-async def send(socket: ServerConnection, **message: object) -> None:
-    await socket.send(json.dumps(message))
+async def send_json(socket, value):
+    await socket.send(json.dumps(value))
 
 
-async def receive(socket: ServerConnection) -> dict[str, Any]:
+async def receive(socket):
     return json.loads(await socket.recv())
 
 
-def http_operation(operation_id: int, *, departure: bool = False) -> dict[str, object]:
-    return {
-        "type": "http",
-        "id": operation_id,
-        "request": {
-            "role": "departure" if departure else "tags",
-            "url": (
-                "https://tags.example/departure"
-                if departure
-                else PARAMS.protection.script_url
-            ),
-            "method": "POST" if departure else "GET",
-            "headers": {},
-            "body": "" if departure else None,
-            "credentials": "omit" if departure else "include",
-        },
-    }
+def test_scripted_profile_http_pagehide_and_session_continuity():
+    async def run():
+        starts, replies, targets = [], [], []
 
-
-@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
-def test_background_http_preserves_binary_errors_and_services_pagehide(
-    asynchronous: bool,
-) -> None:
-    binary = b"\x00\xff\xfe\x80body"
-    observed: list[TargetRequest] = []
-
-    def fetch(request: TargetRequest) -> TargetResponse:
-        observed.append(request)
-        if request.role == "tags":
-            return TargetResponse(403, {"tmx-nonce": "nonce"}, binary)
-        return TargetResponse(202, {}, b"")
-
-    async def scenario() -> None:
-        async def handler(socket: ServerConnection) -> None:
-            await receive(socket)
-            await send(
-                socket, type="hello", state_id="continuation", request_id=REQUEST_ID
-            )
-            await send(socket, type="ready", request_id=REQUEST_ID)
-            await socket.send(json.dumps(http_operation(1)))
-            result = await receive(socket)
-            assert result["response"]["status"] == 403
-            assert base64.b64decode(result["response"]["body"], validate=True) == binary
-            await send(socket, type="collected", request_id=REQUEST_ID)
-            departure = await receive(socket)
-            assert departure["persisted"] is True
-            await socket.send(json.dumps(http_operation(2, departure=True)))
-            result = await receive(socket)
-            assert result["response"]["status"] == 202
-            assert result["response"]["body"] == ""
-            await send(socket, type="pagehide.done")
-            closing = await receive(socket)
-            assert closing == {"type": "close"}
-            await socket.wait_closed()
-
-        async with serve(handler, "127.0.0.1", 0) as server:
-            endpoint = f"http://127.0.0.1:{server.sockets[0].getsockname()[1]}"
-
-            def run_sync() -> None:
-                with NullgateClient("secret", profile_base_url=endpoint) as client:
-                    session = client.open(identity=UUID(int=1), user_agent="UA")
-                    profile = session.profile(PARAMS, Target(fetch, proxy=None))
-                    profile.wait_collected()
-                    assert profile.is_collected
-                    profile.pagehide(persisted=True)
-                    assert not profile.is_closed
-                    session.close()
-                    assert profile.is_closed and not profile.is_collected
-                with pytest.raises(ProfileClosedError):
-                    profile.pagehide()
-
-            async def run_async() -> None:
-                async with NullgateClientAsync(
-                    "secret", profile_base_url=endpoint
-                ) as client:
-                    session = client.open(identity=UUID(int=1), user_agent="UA")
-                    profile = await session.profile(PARAMS, Target(fetch, proxy=None))
-                    await profile.wait_collected()
-                    assert profile.is_collected
-                    await profile.pagehide(persisted=True)
-                    assert not profile.is_closed
-                    await session.aclose()
-                    assert profile.is_closed and not profile.is_collected
-                with pytest.raises(ProfileClosedError):
-                    await profile.pagehide()
-
-            async with asyncio.timeout(10):
-                if asynchronous:
-                    await run_async()
-                else:
-                    await asyncio.to_thread(run_sync)
-
-    asyncio.run(scenario())
-    assert [request.body for request in observed] == [None, b""]
-    assert [request.credentials for request in observed] == ["include", "omit"]
-
-
-def test_duplicate_correlation_fails_before_ready_and_cancels_inflight_http() -> None:
-    async def scenario() -> None:
-        entered, cancelled = asyncio.Event(), asyncio.Event()
-
-        async def fetch(request: TargetRequest) -> TargetResponse:
-            entered.set()
-            try:
-                await asyncio.Future()
-            finally:
-                cancelled.set()
-            raise AssertionError("unreachable")
-
-        async def handler(socket: ServerConnection) -> None:
-            await receive(socket)
-            await send(socket, type="hello", state_id="state", request_id=REQUEST_ID)
-            await socket.send(json.dumps(http_operation(1)))
-            await entered.wait()
-            await socket.send(json.dumps(http_operation(1)))
-            await send(socket, type="ready", request_id=REQUEST_ID)
-            await socket.wait_closed()
-
-        async with serve(handler, "127.0.0.1", 0) as server:
-            endpoint = f"http://127.0.0.1:{server.sockets[0].getsockname()[1]}"
-            async with NullgateClientAsync(
-                "secret", profile_base_url=endpoint
-            ) as client:
-                async with client.open(
-                    identity=UUID(int=1), user_agent="UA"
-                ) as session:
-                    async with asyncio.timeout(5):
-                        with pytest.raises(ProfileProtocolError) as failure:
-                            await session.profile(PARAMS, Target(fetch, proxy=None))
-                        await cancelled.wait()
-                    assert failure.value.request_id == REQUEST_ID
-
-    asyncio.run(scenario())
-
-
-def test_post_ready_service_error_is_not_a_successful_or_collected_profile() -> None:
-    async def scenario() -> None:
-        fail = asyncio.Event()
-
-        async def handler(socket: ServerConnection) -> None:
-            await receive(socket)
-            await send(socket, type="hello", state_id="state", request_id=REQUEST_ID)
-            await send(socket, type="ready", request_id=REQUEST_ID)
-            await fail.wait()
-            await send(
+        async def server(socket):
+            assert socket.request.path == "/threatmetrix/profile"
+            assert socket.request.headers["Authorization"] == "Bearer test-key"
+            assert "X-State-ID" not in socket.request.headers
+            starts.append(await receive(socket))
+            await send_json(
                 socket,
-                type="error",
-                status=422,
-                detail="Profile rejected secret",
-                request_id=REQUEST_ID,
-            )
-            await socket.close()
-
-        async with serve(handler, "127.0.0.1", 0) as server:
-            endpoint = f"http://127.0.0.1:{server.sockets[0].getsockname()[1]}"
-            async with NullgateClientAsync(
-                "secret", profile_base_url=endpoint
-            ) as client:
-                async with client.open(
-                    identity=UUID(int=1), user_agent="UA"
-                ) as session:
-                    profile = await session.profile(
-                        PARAMS,
-                        Target(
-                            lambda request: TargetResponse(200, {}, b""), proxy=None
-                        ),
-                    )
-                    fail.set()
-                    with pytest.raises(ProfileServiceError) as failure:
-                        await asyncio.wait_for(profile.wait_collected(), timeout=5)
-                    assert failure.value.status_code == 422
-                    assert failure.value.request_id == REQUEST_ID
-                    assert "secret" not in str(failure.value)
-                    assert profile.is_closed and not profile.is_collected
-                    with pytest.raises(ProfileServiceError):
-                        await profile.pagehide()
-
-    asyncio.run(scenario())
-
-
-@pytest.mark.parametrize("release", [False, True], ids=["cancel", "release"])
-def test_real_turn_allocation_is_held_and_refresh_zero_releases_it(
-    release: bool,
-) -> None:
-    async def scenario() -> None:
-        allocated, deleted, disconnected = (
-            asyncio.Event(),
-            asyncio.Event(),
-            asyncio.Event(),
-        )
-
-        async def turn_peer(
-            reader: asyncio.StreamReader, writer: asyncio.StreamWriter
-        ) -> None:
-            try:
-                while True:
-                    header = await reader.readexactly(20)
-                    size = int.from_bytes(header[2:4], "big")
-                    body = await reader.readexactly(size + stun.padding_length(size))
-                    request = stun.parse_message(header + body)
-                    response = stun.Message(
-                        request.message_method,
-                        stun.Class.RESPONSE,
-                        transaction_id=request.transaction_id,
-                    )
-                    if request.message_method == stun.Method.ALLOCATE:
-                        response.attributes["LIFETIME"] = 600
-                        response.attributes["XOR-RELAYED-ADDRESS"] = (
-                            "192.0.2.23",
-                            45678,
-                        )
-                        allocated.set()
-                    else:
-                        assert request.message_method == stun.Method.REFRESH
-                        assert request.attributes["LIFETIME"] == 0
-                        response.attributes["LIFETIME"] = 0
-                        deleted.set()
-                    writer.write(bytes(response))
-                    await writer.drain()
-            except asyncio.IncompleteReadError:
-                pass
-            finally:
-                writer.close()
-                await writer.wait_closed()
-                disconnected.set()
-
-        async with await asyncio.start_server(turn_peer, "127.0.0.1", 0) as turn_server:
-            turn_port = turn_server.sockets[0].getsockname()[1]
-
-            async def handler(socket: ServerConnection) -> None:
-                await receive(socket)
-                await send(
-                    socket, type="hello", state_id="state", request_id=REQUEST_ID
-                )
-                await send(
-                    socket,
-                    type="ice",
-                    id=3,
-                    server={
-                        "host": "127.0.0.1",
-                        "port": turn_port,
-                        "transport": "tcp",
-                        "username": "source-user",
-                        "credential": "source-credential",
-                    },
-                )
-                result = await receive(socket)
-                [candidate] = result["observation"]["candidates"]
-                assert "192.0.2.23 45678 typ relay" in candidate["value"]
-                assert candidate["elapsed_ms"] >= 0
-                assert (
-                    result["observation"]["complete_at_ms"] >= candidate["elapsed_ms"]
-                )
-                assert allocated.is_set() and not deleted.is_set()
-                await send(socket, type="ready", request_id=REQUEST_ID)
-                if release:
-                    await send(socket, type="ice.release", id=3)
-                    await deleted.wait()
-                    await send(socket, type="collected", request_id=REQUEST_ID)
-                with suppress(Exception):
-                    await receive(socket)
-                await socket.wait_closed()
-
-            async with serve(handler, "127.0.0.1", 0) as server:
-                endpoint = f"http://127.0.0.1:{server.sockets[0].getsockname()[1]}"
-                async with asyncio.timeout(10):
-                    async with NullgateClientAsync(
-                        "secret", profile_base_url=endpoint
-                    ) as client:
-                        session = client.open(identity=UUID(int=1), user_agent="UA")
-                        profile = await session.profile(
-                            PARAMS,
-                            Target(
-                                lambda request: TargetResponse(200, {}, b""), proxy=None
-                            ),
-                        )
-                        if release:
-                            await profile.wait_collected()
-                        else:
-                            assert allocated.is_set() and not deleted.is_set()
-                        await session.aclose()
-                        await deleted.wait()
-                        await disconnected.wait()
-
-    asyncio.run(scenario())
-
-
-def test_profile_summarizes_raw_fields_and_preserves_empty_observations() -> None:
-    from nullgate.akamai import prepare_inputs
-
-    raw_value = " a𝄞1! "
-    summary = prepare_inputs([{"value": raw_value}])[0]["value"]
-
-    async def scenario() -> None:
-        starts: list[dict[str, Any]] = []
-
-        async def handler(socket: ServerConnection) -> None:
-            message = await receive(socket)
-            starts.append(message)
-            assert raw_value not in json.dumps(message, ensure_ascii=False)
-            if len(starts) == 1:
-                [field] = message["inputs"]
-                assert field["attributes"] == {"name": "identifier"}
-                assert field["value"]["length"] == 7
-                assert field["value"]["counts"] == [7, 3, 1, 1]
-                assert field["value"]["trimmed_length"] == 5
-                [action] = message["actions"]
-                assert action["type"] == "input" and isinstance(action["value"], dict)
-            else:
-                assert message["inputs"] == []
-                assert message["actions"] == []
-            await send(socket, type="hello", state_id="state", request_id=REQUEST_ID)
-            await send(socket, type="ready", request_id=REQUEST_ID)
-            await send(socket, type="collected", request_id=REQUEST_ID)
-            await receive(socket)
-            await socket.wait_closed()
-
-        async with serve(handler, "127.0.0.1", 0) as server:
-            endpoint = f"http://127.0.0.1:{server.sockets[0].getsockname()[1]}"
-            async with NullgateClientAsync(
-                "secret", profile_base_url=endpoint
-            ) as client:
-                async with client.open(
-                    identity=UUID(int=1), user_agent="UA"
-                ) as session:
-                    target = Target(
-                        lambda request: TargetResponse(200, {}, b""), proxy=None
-                    )
-                    async with asyncio.timeout(5):
-                        async with await session.profile(
-                            ThreatMetrixParams(
-                                PARAMS.protection,
-                                inputs=[{"name": "identifier", "value": raw_value}],
-                                actions=[{"type": "input", "at": 10, "value": summary}],
-                            ),
-                            target,
-                        ) as profile:
-                            await profile.wait_collected()
-                        async with await session.profile(
-                            ThreatMetrixParams(
-                                PARAMS.protection, inputs=[], actions=[]
-                            ),
-                            target,
-                        ) as profile:
-                            await profile.wait_collected()
-
-    asyncio.run(scenario())
-
-
-def test_raw_action_values_are_rejected_before_opening_the_profile_socket() -> None:
-    async def scenario() -> None:
-        opened = False
-
-        async def handler(socket: ServerConnection) -> None:
-            nonlocal opened
-            opened = True
-            await socket.close()
-
-        async with serve(handler, "127.0.0.1", 0) as server:
-            endpoint = f"http://127.0.0.1:{server.sockets[0].getsockname()[1]}"
-            async with NullgateClientAsync(
-                "secret", profile_base_url=endpoint
-            ) as client:
-                async with client.open(
-                    identity=UUID(int=1), user_agent="UA"
-                ) as session:
-                    with pytest.raises(TypeError) as failure:
-                        await session.profile(
-                            ThreatMetrixParams(
-                                PARAMS.protection,
-                                actions=[{"type": "input", "value": "never-send-this"}],
-                            ),
-                            Target(
-                                lambda request: TargetResponse(200, {}, b""), proxy=None
-                            ),
-                        )
-                    assert "never-send-this" not in str(failure.value)
-                    assert not opened
-
-    asyncio.run(scenario())
-
-
-def test_ice_release_during_allocate_closes_tcp_without_a_stale_observation() -> None:
-    async def scenario() -> None:
-        pending, disconnected = asyncio.Event(), asyncio.Event()
-
-        async def turn_peer(
-            reader: asyncio.StreamReader, writer: asyncio.StreamWriter
-        ) -> None:
-            try:
-                header = await reader.readexactly(20)
-                await reader.readexactly(int.from_bytes(header[2:4], "big"))
-                pending.set()
-                assert await reader.read() == b""
-            finally:
-                writer.close()
-                await writer.wait_closed()
-                disconnected.set()
-
-        async with await asyncio.start_server(turn_peer, "127.0.0.1", 0) as turn_server:
-            turn_port = turn_server.sockets[0].getsockname()[1]
-
-            async def handler(socket: ServerConnection) -> None:
-                await receive(socket)
-                await send(
-                    socket, type="hello", state_id="state", request_id=REQUEST_ID
-                )
-                await send(
-                    socket,
-                    type="ice",
-                    id=5,
-                    server={
-                        "host": "127.0.0.1",
-                        "port": turn_port,
-                        "transport": "tcp",
-                        "username": "source-user",
-                        "credential": "source-credential",
-                    },
-                )
-                await pending.wait()
-                await send(socket, type="ice.release", id=5)
-                await send(socket, type="ready", request_id=REQUEST_ID)
-                await send(socket, type="collected", request_id=REQUEST_ID)
-                assert await receive(socket) == {"type": "close"}
-                await socket.wait_closed()
-
-            async with serve(handler, "127.0.0.1", 0) as server:
-                endpoint = f"http://127.0.0.1:{server.sockets[0].getsockname()[1]}"
-                async with asyncio.timeout(5):
-                    async with NullgateClientAsync(
-                        "secret", profile_base_url=endpoint
-                    ) as client:
-                        async with client.open(
-                            identity=UUID(int=1), user_agent="UA"
-                        ) as session:
-                            async with await session.profile(
-                                PARAMS,
-                                Target(
-                                    lambda request: TargetResponse(200, {}, b""),
-                                    proxy=None,
-                                ),
-                            ) as profile:
-                                await profile.wait_collected()
-                                await disconnected.wait()
-
-    asyncio.run(scenario())
-
-
-@pytest.mark.parametrize("negotiated", [False, True])
-def test_target_failure_metadata_is_negotiated_and_preserves_local_error(
-    negotiated: bool,
-) -> None:
-    local_error = TimeoutError("https://user:private@target.example/?cookie=private")
-
-    async def fetch(request: TargetRequest) -> TargetResponse:
-        raise local_error
-
-    async def scenario() -> None:
-        async def handler(socket: ServerConnection) -> None:
-            assert socket.request is not None
-            assert socket.request.headers["X-Nullgate-Error-Format"] == "1"
-            await receive(socket)
-            greeting: dict[str, object] = {
-                "type": "hello",
-                "state_id": "state",
-                "request_id": REQUEST_ID,
-            }
-            if negotiated:
-                greeting["error_format"] = 1
-            await send(socket, **greeting)
-            await socket.send(json.dumps(http_operation(1)))
-            result = await receive(socket)
-            expected: dict[str, object] = {
-                "type": "http.error",
-                "id": 1,
-                "detail": "Target request failed",
-            }
-            if negotiated:
-                expected["error"] = {"kind": "timeout", "type": "TimeoutError"}
-            assert result == expected
-            assert "private" not in json.dumps(result)
-            error: dict[str, object] = {
-                "type": "error",
-                "status": 502,
-                "detail": "private legacy detail",
-                "request_id": REQUEST_ID,
-            }
-            if negotiated:
-                error["error"] = {
-                    "code": "CLIENT_TRANSPORT_ERROR",
-                    "origin": "client",
-                    "message": "Target transport failed",
-                    "retryable": None,
-                    "stage": "target_http",
-                    "command_id": 1,
-                    "target": {"role": "tags", "method": "GET", "host": "tags.example"},
-                    "cause": result["error"],
-                }
-            await send(socket, **error)
-            await socket.wait_closed()
-
-        async with serve(handler, "127.0.0.1", 0) as server:
-            endpoint = f"http://127.0.0.1:{server.sockets[0].getsockname()[1]}"
-            async with NullgateClientAsync("key", profile_base_url=endpoint) as client:
-                session = client.open(identity=UUID(int=1), user_agent="UA")
-                with pytest.raises(ProfileServiceError) as failure:
-                    await session.profile(PARAMS, Target(fetch, proxy=None))
-                error = failure.value
-                assert error.target_error is (local_error if negotiated else None)
-                assert error.__cause__ is None
-                assert "private" not in str(error)
-                assert "private" not in repr(error)
-                if negotiated:
-                    assert error.error_info is not None
-                    assert error.error_info.code == "CLIENT_TRANSPORT_ERROR"
-                    assert error.error_info.target is not None
-                    assert error.error_info.target.host == "tags.example"
-                else:
-                    assert error.error_info is None
-
-    asyncio.run(scenario())
-
-
-def test_malformed_error_metadata_does_not_replace_service_failure() -> None:
-    async def scenario() -> None:
-        async def handler(socket: ServerConnection) -> None:
-            await receive(socket)
-            await send(
-                socket,
-                type="error",
-                status=502,
-                detail="legacy failure",
-                request_id=REQUEST_ID,
-                error={
-                    "code": "FUTURE_ERROR",
-                    "origin": "service",
-                    "message": "safe",
-                    "retryable": None,
-                    "cause": {"kind": []},
+                {
+                    "type": "hello",
+                    "session": "tmx-session",
+                    "request_id": "correlation-id",
                 },
             )
-            await socket.wait_closed()
+            await send_json(
+                socket,
+                {
+                    "type": "http",
+                    "id": 1,
+                    "request": {
+                        "role": "tags",
+                        "url": "https://risk.example/fetch",
+                        "method": "POST",
+                        "headers": {"content-type": "text/plain"},
+                        "body": "aGVsbG8=",
+                        "credentials": "omit",
+                    },
+                },
+            )
+            replies.append(await receive(socket))
+            await send_json(socket, {"type": "ready", "request_id": "correlation-id"})
+            await send_json(
+                socket, {"type": "collected", "request_id": "correlation-id"}
+            )
+            departure = await receive(socket)
+            assert departure["type"] == "pagehide" and departure["persisted"] is False
+            assert departure["at_ms"] >= starts[-1]["at_ms"]
+            await send_json(socket, {"type": "pagehide.done"})
+            assert await receive(socket) == {"type": "close"}
 
-        async with serve(handler, "127.0.0.1", 0) as server:
-            endpoint = f"http://127.0.0.1:{server.sockets[0].getsockname()[1]}"
-            async with NullgateClientAsync("key", profile_base_url=endpoint) as client:
-                session = client.open(identity=UUID(int=1), user_agent="UA")
-                with pytest.raises(ProfileServiceError) as failure:
-                    await session.profile(
-                        PARAMS,
-                        Target(lambda _: TargetResponse(200, {}, b""), proxy=None),
-                    )
-                assert failure.value.detail == "legacy failure"
-                assert failure.value.error_info is None
-                assert failure.value.status_code == 502
+        async def send(request):
+            targets.append(request)
+            return TargetResponse(201, {"x-observed": "yes"}, b"world")
 
-    asyncio.run(scenario())
+        async with serve(server, "127.0.0.1", 0) as listener:
+            port = listener.sockets[0].getsockname()[1]
+            async with Nullgate("test-key", base_url=f"http://127.0.0.1:{port}") as ng:
+                page = ng.session(
+                    user_agent="browser", profile=PROFILE, timezone="Europe/London"
+                ).page(URL, HTML)
+                for _ in range(2):
+                    async with page.threatmetrix(send=send) as tmx:
+                        assert tmx.request_id == "correlation-id"
+                        await tmx.wait_collected()
+                        assert tmx.is_collected
+                        await tmx.pagehide()
+        assert len(starts) == len(targets) == len(replies) == 2
+        document_id = starts[0]["document_id"]
+        UUID(document_id)
+        expected = {
+            "type": "start",
+            "profile": PROFILE,
+            "session": None,
+            "user_agent": "browser",
+            "timezone": "Europe/London",
+            "url": URL,
+            "html": HTML,
+            "document_id": document_id,
+            "started_at_ms": starts[0]["started_at_ms"],
+            "at_ms": starts[0]["at_ms"],
+            "tags_url": "https://risk.example/tags.js?org_id=org&session_id=visit",
+        }
+        assert starts[0] == expected
+        assert starts[1] == {
+            **expected,
+            "session": "tmx-session",
+            "at_ms": starts[1]["at_ms"],
+        }
+        assert targets[0].body == b"hello" and targets[0].credentials == "omit"
+        response = replies[0].pop("response")
+        assert replies[0] == {"type": "http.result", "id": 1}
+        assert response == {
+            "status": 201,
+            "headers": {"x-observed": "yes"},
+            "body": "d29ybGQ=",
+            "received_at_ms": response["received_at_ms"],
+        }
+        assert response["received_at_ms"] >= starts[0]["at_ms"]
+
+    asyncio.run(run())
 
 
 @pytest.mark.parametrize(
-    ("code", "origin", "command_id", "expected"),
+    "message",
     [
-        ("CLIENT_TRANSPORT_ERROR", "client", 1, 1),
-        ("CLIENT_TRANSPORT_ERROR", "client", 2, 2),
-        ("CLIENT_TRANSPORT_ERROR", "client", 3, None),
-        ("UPSTREAM_ERROR", "upstream", 1, None),
-        ("CLIENT_TRANSPORT_ERROR", "service", 1, None),
-        ("CLIENT_TRANSPORT_ERROR", "client", None, None),
-        ("CLIENT_TRANSPORT_ERROR", "client", True, None),
-        ("CLIENT_TRANSPORT_ERROR", "client", 0, None),
-        ("CLIENT_TRANSPORT_ERROR", "client", "1", None),
+        '{"type":"hello","session":"s","request_id":"id","extra":1}',
+        '{"type":"hello","session":"s","request_id":"id","request_id":"duplicate"}',
+        '{"type":"ready","request_id":"id"}',
+        '{"type":"unknown"}',
+        '{"type":"http","id":1,"request":{}}',
+        b"binary",
     ],
 )
-def test_concurrent_target_failures_require_exact_metadata(
-    code: str, origin: str, command_id: object, expected: int | None
-) -> None:
-    local_errors = {1: TimeoutError("private first"), 2: OSError("private second")}
-
-    async def scenario() -> None:
-        entered = 0
-        all_entered = asyncio.Event()
-
-        async def fetch(request: TargetRequest) -> TargetResponse:
-            nonlocal entered
-            entered += 1
-            if entered == 3:
-                all_entered.set()
-            await all_entered.wait()
-            operation_id = int(request.url.rsplit("/", 1)[1])
-            if operation_id in local_errors:
-                raise local_errors[operation_id]
-            return TargetResponse(502, {}, b"real target failure")
-
-        async def handler(socket: ServerConnection) -> None:
+def test_malformed_profile_messages_raise_one_error_type(message):
+    async def run():
+        async def server(socket):
             await receive(socket)
-            await send(
+            await socket.send(message)
+            await socket.wait_closed()
+
+        async with serve(server, "127.0.0.1", 0) as listener:
+            port = listener.sockets[0].getsockname()[1]
+            async with Nullgate("test-key", base_url=f"http://127.0.0.1:{port}") as ng:
+                page = ng.session(user_agent="browser").page(URL, HTML)
+                with pytest.raises(NullgateError):
+                    async with page.threatmetrix(
+                        send=lambda request: TargetResponse(200, {}, b"")
+                    ):
+                        pytest.fail("Malformed profile became ready")
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize(
+    "code",
+    [
+        "invalid_key",
+        "insufficient_balance",
+        "forbidden",
+        "invalid_request",
+        "session_busy",
+        "rate_limited",
+        "maintenance",
+        "unavailable",
+        "internal",
+        "upstream",
+    ],
+)
+def test_websocket_errors_preserve_public_envelope_and_redact_key(code):
+    async def run():
+        async def server(socket):
+            await receive(socket)
+            await send_json(
                 socket,
-                type="hello",
-                state_id="state",
-                request_id=REQUEST_ID,
-                error_format=1,
-            )
-            for operation_id in (1, 2, 3):
-                operation = http_operation(operation_id)
-                operation["request"]["url"] = f"https://tags.example/{operation_id}"
-                await socket.send(json.dumps(operation))
-            callbacks = {
-                result["id"]: result
-                for result in [
-                    await receive(socket),
-                    await receive(socket),
-                    await receive(socket),
-                ]
-            }
-            assert callbacks[1]["type"] == callbacks[2]["type"] == "http.error"
-            assert callbacks[3]["response"]["status"] == 502
-            await send(
-                socket,
-                type="error",
-                status=502,
-                detail="legacy service failure",
-                request_id=REQUEST_ID,
-                error={
+                {
+                    "type": "error",
                     "code": code,
-                    "origin": origin,
-                    "message": "safe",
-                    "retryable": None,
-                    "command_id": command_id,
+                    "message": "Rejected test-key",
+                    "request_id": "support-id",
                 },
             )
             await socket.wait_closed()
 
-        async with serve(handler, "127.0.0.1", 0) as server:
-            endpoint = f"http://127.0.0.1:{server.sockets[0].getsockname()[1]}"
-            async with NullgateClientAsync("key", profile_base_url=endpoint) as client:
-                session = client.open(identity=UUID(int=1), user_agent="UA")
-                with pytest.raises(ProfileServiceError) as failure:
-                    await session.profile(PARAMS, Target(fetch, proxy=None))
-                error = failure.value
-                assert error.target_error is local_errors.get(expected)
-                assert error.status_code == 502
-                assert error.detail == "legacy service failure"
-                assert error.__cause__ is None
-                if type(command_id) is not int or command_id <= 0:
-                    assert error.error_info is None
+        async with serve(server, "127.0.0.1", 0) as listener:
+            port = listener.sockets[0].getsockname()[1]
+            async with Nullgate("test-key", base_url=f"http://127.0.0.1:{port}") as ng:
+                with pytest.raises(NullgateError) as error:
+                    async with (
+                        ng.session(user_agent="browser")
+                        .page(URL, HTML)
+                        .threatmetrix(send=lambda request: TargetResponse(200, {}, b""))
+                    ):
+                        pytest.fail("Failed profile became ready")
+                assert (
+                    error.value.code,
+                    error.value.message,
+                    error.value.request_id,
+                    error.value.status,
+                ) == (code, "Rejected [redacted]", "support-id", None)
 
-    asyncio.run(scenario())
+    asyncio.run(run())
+
+
+def test_callback_failure_reports_sanitized_http_error():
+    async def run():
+        messages = []
+
+        async def server(socket):
+            await receive(socket)
+            await send_json(
+                socket, {"type": "hello", "session": "s", "request_id": "id"}
+            )
+            await send_json(
+                socket,
+                {
+                    "type": "http",
+                    "id": 1,
+                    "request": {
+                        "role": "tags",
+                        "url": "https://risk.example/fetch",
+                        "method": "GET",
+                        "headers": {},
+                        "body": None,
+                        "credentials": "include",
+                    },
+                },
+            )
+            messages.append(await receive(socket))
+            await send_json(
+                socket,
+                {
+                    "type": "error",
+                    "code": "upstream",
+                    "message": "Transport failed",
+                    "request_id": "id",
+                },
+            )
+            await socket.wait_closed()
+
+        def send(request):
+            raise RuntimeError("secret cookie and password")
+
+        async with serve(server, "127.0.0.1", 0) as listener:
+            port = listener.sockets[0].getsockname()[1]
+            async with Nullgate("test-key", base_url=f"http://127.0.0.1:{port}") as ng:
+                with pytest.raises(NullgateError, match="Transport failed"):
+                    async with (
+                        ng.session(user_agent="browser")
+                        .page(URL, HTML)
+                        .threatmetrix(send=send)
+                    ):
+                        pytest.fail("Failed target transport became ready")
+        assert messages == [
+            {"type": "http.error", "id": 1, "detail": "Target request failed"}
+        ]
+
+    asyncio.run(run())
+
+
+def test_ice_allocation_lives_until_release_and_is_closed(monkeypatch):
+    async def run():
+        closed = asyncio.Event()
+        release_started = asyncio.Event()
+
+        class Allocation:
+            def __init__(self, server, proxy):
+                assert proxy == "socks5://127.0.0.1:1080"
+
+            async def open(self):
+                return {
+                    "candidates": [{"value": "candidate", "elapsed_ms": 1}],
+                    "complete_at_ms": 2,
+                }
+
+            async def wait_for_release(self, release):
+                release_started.set()
+                await release.wait()
+
+            async def aclose(self):
+                closed.set()
+
+        monkeypatch.setattr("nullgate.profile._TurnAllocation", Allocation)
+        observations = []
+
+        async def server(socket):
+            await receive(socket)
+            await send_json(
+                socket, {"type": "hello", "session": "s", "request_id": "id"}
+            )
+            await send_json(
+                socket,
+                {
+                    "type": "ice",
+                    "id": 1,
+                    "server": {
+                        "host": "turn.example",
+                        "port": 3478,
+                        "transport": "tcp",
+                        "username": "u",
+                        "credential": "c",
+                    },
+                },
+            )
+            observations.append(await receive(socket))
+            await release_started.wait()
+            assert not closed.is_set()
+            await send_json(socket, {"type": "ice.release", "id": 1})
+            await closed.wait()
+            await send_json(socket, {"type": "ready", "request_id": "id"})
+            assert await receive(socket) == {"type": "close"}
+
+        async with serve(server, "127.0.0.1", 0) as listener:
+            port = listener.sockets[0].getsockname()[1]
+            async with Nullgate("test-key", base_url=f"http://127.0.0.1:{port}") as ng:
+                async with (
+                    ng.session(user_agent="browser")
+                    .page(URL, HTML)
+                    .threatmetrix(
+                        send=lambda request: TargetResponse(200, {}, b""),
+                        proxy="socks5://127.0.0.1:1080",
+                    )
+                ):
+                    assert closed.is_set()
+        assert observations == [
+            {
+                "type": "ice.result",
+                "id": 1,
+                "observation": {
+                    "candidates": [{"value": "candidate", "elapsed_ms": 1}],
+                    "complete_at_ms": 2,
+                },
+            }
+        ]
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize(
+    "failures,retry_after,expected",
+    [
+        (2, "0", 3),
+        (3, "0", 3),
+        (1, "999", 1),
+        (1, "invalid", 1),
+    ],
+)
+def test_handshake_maintenance_retries_respect_startup_timeout(
+    failures, retry_after, expected
+):
+    async def run():
+        attempts = []
+
+        def handshake(connection, request):
+            attempts.append(request.path)
+            if len(attempts) <= failures:
+                response = connection.respond(
+                    503,
+                    json.dumps(
+                        {
+                            "code": "maintenance",
+                            "message": "Wait",
+                            "request_id": "id",
+                        }
+                    ),
+                )
+                response.headers["Retry-After"] = retry_after
+                return response
+            return None
+
+        async def server(socket):
+            await receive(socket)
+            await send_json(
+                socket, {"type": "hello", "session": "s", "request_id": "id"}
+            )
+            await send_json(socket, {"type": "ready", "request_id": "id"})
+            assert await receive(socket) == {"type": "close"}
+
+        async with serve(server, "127.0.0.1", 0, process_request=handshake) as listener:
+            port = listener.sockets[0].getsockname()[1]
+            async with Nullgate(
+                "test-key", base_url=f"http://127.0.0.1:{port}", timeout=1
+            ) as ng:
+                page = ng.session(user_agent="browser").page(URL, HTML)
+                context = page.threatmetrix(
+                    send=lambda request: TargetResponse(200, {}, b"")
+                )
+                if failures == 2 and retry_after == "0":
+                    async with context as profile:
+                        assert profile.request_id == "id"
+                else:
+                    with pytest.raises(NullgateError) as error:
+                        async with context:
+                            pytest.fail("Maintenance profile became ready")
+                    assert error.value.code == "maintenance"
+                    assert error.value.status == 503
+        assert len(attempts) == expected
+
+    asyncio.run(run())
+
+
+def test_sync_profile_keeps_reader_alive_between_pagehide_calls():
+    from nullgate import Nullgate as SyncNullgate
+
+    async def run():
+        departures = []
+
+        async def server(socket):
+            await receive(socket)
+            await send_json(
+                socket, {"type": "hello", "session": "s", "request_id": "id"}
+            )
+            await send_json(socket, {"type": "ready", "request_id": "id"})
+            for _ in range(2):
+                departures.append(await receive(socket))
+                await send_json(socket, {"type": "pagehide.done"})
+            assert await receive(socket) == {"type": "close"}
+
+        async with serve(server, "127.0.0.1", 0) as listener:
+            port = listener.sockets[0].getsockname()[1]
+
+            def work():
+                with SyncNullgate(
+                    "test-key", base_url=f"http://127.0.0.1:{port}"
+                ) as ng:
+                    page = ng.session(user_agent="browser").page(URL, HTML)
+                    with page.threatmetrix(
+                        send=lambda request: TargetResponse(200, {}, b"")
+                    ) as profile:
+                        profile.pagehide(persisted=True)
+                        profile.pagehide(persisted=False)
+
+            await asyncio.to_thread(work)
+        assert [message["persisted"] for message in departures] == [True, False]
+
+    asyncio.run(run())
+
+
+def test_profile_startup_timeout_closes_unready_connection():
+    async def run():
+        closed = asyncio.Event()
+
+        async def server(socket):
+            await receive(socket)
+            await socket.wait_closed()
+            closed.set()
+
+        async with serve(server, "127.0.0.1", 0) as listener:
+            port = listener.sockets[0].getsockname()[1]
+            async with Nullgate(
+                "test-key", base_url=f"http://127.0.0.1:{port}", timeout=0.02
+            ) as ng:
+                with pytest.raises(NullgateError) as error:
+                    async with (
+                        ng.session(user_agent="browser")
+                        .page(URL, HTML)
+                        .threatmetrix(send=lambda request: TargetResponse(200, {}, b""))
+                    ):
+                        pytest.fail("Unready profile entered")
+                assert error.value.code == "transport_error"
+            await asyncio.wait_for(closed.wait(), 1)
+
+    asyncio.run(run())

@@ -5,107 +5,22 @@ import base64
 import binascii
 import json
 import re
-from collections.abc import Awaitable, Callable, Coroutine
+from collections.abc import Callable, Coroutine
 from contextlib import suppress
 from threading import Event, Thread, current_thread
-from time import time_ns
+from time import monotonic, time_ns
 from types import TracebackType
 from typing import TypeVar, cast
-from urllib.parse import urlsplit, urlunsplit
-from uuid import UUID
+from urllib.parse import urlsplit
 
 from websockets.asyncio.client import ClientConnection, connect
 from websockets.exceptions import InvalidStatus
 
 from ._turn import _TurnAllocation, _TurnServer
-from .akamai.inputs import _prepare_actions, prepare_inputs
-from .errors import ErrorInfo, _parse_error_info, _transport_cause
+from .errors import NullgateError, _retry_after
 from .target import Target, TargetRequest
-from .threatmetrix import ThreatMetrixCollector, ThreatMetrixParams
 
-_PROFILE_BASE_URL = "https://threatmetrix.nullgate.club"
 _T = TypeVar("_T")
-
-
-class ProfileError(Exception):
-    """A profiling failure, without a fabricated HTTP-library response."""
-
-    def __init__(
-        self,
-        detail: str,
-        *,
-        request_id: str | None = None,
-        status_code: int | None = None,
-        error_info: ErrorInfo | None = None,
-        target_error: BaseException | None = None,
-    ) -> None:
-        self.detail = detail
-        self.request_id = request_id
-        self.status_code = status_code
-        self.error_info = error_info
-        self.target_error = target_error
-        if error_info is not None:
-            description = (
-                "Target HTTP transport failed"
-                if error_info.code == "CLIENT_TRANSPORT_ERROR"
-                and error_info.origin == "client"
-                else "Profile failed"
-            )
-            description = f"[{error_info.code}/{error_info.origin}] {description}"
-        else:
-            description = (
-                "Unclassified profile HTTP failure"
-                if isinstance(self, ProfileServiceError)
-                else detail
-            )
-        super().__init__(
-            f"{description} (status={status_code}, request_id={request_id})"
-        )
-
-
-class ProfileServiceError(ProfileError):
-    """The service rejected or failed the profile."""
-
-
-class ProfileProtocolError(ProfileError):
-    """The peer sent a malformed, out-of-order, or unknown protocol message."""
-
-
-class ProfileTransportError(ProfileError):
-    """The WebSocket or a held TURN allocation ended unexpectedly."""
-
-
-class ProfileClosedError(ProfileError):
-    """An operation requires a live profile, but it has been closed."""
-
-
-def _profile_url(base_url: str, identity: UUID) -> str:
-    try:
-        parsed = urlsplit(base_url)
-        if (
-            parsed.scheme not in {"http", "https", "ws", "wss"}
-            or not parsed.hostname
-            or parsed.username is not None
-            or parsed.password is not None
-            or parsed.query
-            or parsed.fragment
-        ):
-            raise ValueError
-        _ = parsed.port
-    except ValueError:
-        raise ValueError(
-            "profile_base_url must be an absolute HTTP(S) or WS(S) URL"
-        ) from None
-    scheme = {"http": "ws", "https": "wss"}.get(parsed.scheme, parsed.scheme)
-    return urlunsplit(
-        (
-            scheme,
-            parsed.netloc,
-            f"{parsed.path.rstrip('/')}/v1/{identity}/profile",
-            "",
-            "",
-        )
-    )
 
 
 def _object(value: object) -> dict[str, object]:
@@ -127,12 +42,6 @@ def _text(value: object) -> str:
     if not isinstance(value, str) or not value:
         raise ValueError
     return value
-
-
-def _request_id(value: object) -> str:
-    result = _text(value)
-    UUID(result)
-    return result
 
 
 def _http_request(value: object) -> TargetRequest:
@@ -199,54 +108,21 @@ class ProfileAsync:
         *,
         url: str,
         api_key: str,
-        user_agent: str,
-        state_id: str | None,
-        timezone: str | None,
-        params: ThreatMetrixParams,
+        start: dict[str, object],
         target: Target,
         on_state: Callable[[str], None],
         on_close: Callable[[], None],
-        reporter: Callable[[str], Awaitable[bool]],
-        open_timeout: float | None,
+        open_timeout: float,
     ) -> None:
         self._url = url
         self._api_key = api_key
-        self._user_agent = user_agent
-        self._state_id = state_id
-        page = params.protection.page
-        self._start_message: dict[str, object] = {
-            "type": "start",
-            "at_ms": time_ns() // 1_000_000,
-            "website": {
-                "url": page.url,
-                "html": page.html,
-                "document_id": page.document_id,
-                "started_at_ms": page.started_at_ms,
-            },
-            "timezone": timezone,
-        }
-        protection = params.protection
-        if isinstance(protection, ThreatMetrixCollector):
-            self._start_message["collector"] = {
-                "url": protection.script_url,
-                "org_id": protection.org_id,
-                "session_id": protection.session_id,
-            }
-        else:
-            self._start_message["tags_url"] = protection.script_url
-        if params.inputs is not None:
-            self._start_message["inputs"] = prepare_inputs(params.inputs)
-        if params.actions is not None:
-            self._start_message["actions"] = _prepare_actions(params.actions)
+        self._start_message = start
         self._target = target
         self._on_state = on_state
         self._on_close = on_close
-        self._reporter = reporter
         self._open_timeout = open_timeout
         self._request_id: str | None = None
-        self._error_format = False
-        self._target_errors: dict[int, BaseException] = {}
-        self._error: ProfileError | None = None
+        self._error: NullgateError | None = None
         self._websocket: ClientConnection | None = None
         self._runner: asyncio.Task[None] | None = None
         self._close_task: asyncio.Task[None] | None = None
@@ -267,7 +143,7 @@ class ProfileAsync:
     @property
     def request_id(self) -> str:
         if self._request_id is None:
-            raise ProfileProtocolError("Profile has no request ID")
+            raise NullgateError("Profile has no request ID", code="protocol_error")
         return self._request_id
 
     @property
@@ -275,7 +151,7 @@ class ProfileAsync:
         return self._closed or self._closing
 
     @property
-    def error(self) -> ProfileError | None:
+    def error(self) -> NullgateError | None:
         return self._error
 
     @property
@@ -287,18 +163,28 @@ class ProfileAsync:
         if self._error is not None:
             raise self._error
         if self.is_closed:
-            raise ProfileClosedError("Profile is closed", request_id=self._request_id)
+            raise NullgateError(
+                "Profile is closed", code="closed", request_id=self._request_id
+            )
 
     async def _start(self) -> None:
         self.raise_for_error()
         self._runner = asyncio.create_task(self._run())
         try:
-            await self._ready.wait()
+            async with asyncio.timeout(self._open_timeout):
+                await self._ready.wait()
             self.raise_for_error()
             if not self._ready_received:
-                raise ProfileProtocolError(
-                    "Profile ended before ready", request_id=self._request_id
+                raise NullgateError(
+                    "Profile ended before ready",
+                    code="protocol_error",
+                    request_id=self._request_id,
                 )
+        except TimeoutError:
+            await self.aclose()
+            raise NullgateError(
+                "Profile startup timed out", code="transport_error"
+            ) from None
         except BaseException:
             await self.aclose()
             raise
@@ -306,8 +192,10 @@ class ProfileAsync:
     async def _send(self, message: dict[str, object]) -> None:
         async with self._writes:
             if self._websocket is None:
-                raise ProfileTransportError(
-                    "Profile connection is unavailable", request_id=self._request_id
+                raise NullgateError(
+                    "Profile connection is unavailable",
+                    code="transport_error",
+                    request_id=self._request_id,
                 )
             try:
                 await self._websocket.send(
@@ -316,49 +204,53 @@ class ProfileAsync:
             except asyncio.CancelledError:
                 raise
             except Exception:
-                raise ProfileTransportError(
-                    "Profile connection failed", request_id=self._request_id
+                raise NullgateError(
+                    "Profile connection failed",
+                    code="transport_error",
+                    request_id=self._request_id,
                 ) from None
 
-    async def _run(self) -> None:
-        try:
-            headers = {
-                "Authorization": f"Bearer {self._api_key}",
-                "User-Agent": self._user_agent,
-                "X-Nullgate-Error-Format": "1",
-            }
-            if self._state_id is not None:
-                headers["X-State-ID"] = self._state_id
+    async def _connect(self) -> ClientConnection:
+        deadline = monotonic() + self._open_timeout
+        for attempt in range(3):
             try:
-                self._websocket = await connect(
+                return await connect(
                     self._url,
-                    additional_headers=headers,
+                    additional_headers={"Authorization": f"Bearer {self._api_key}"},
                     user_agent_header=None,
                     proxy=None,
-                    open_timeout=self._open_timeout,
+                    open_timeout=max(0.001, deadline - monotonic()),
                     close_timeout=4,
                 )
             except InvalidStatus as exc:
-                diagnostic_id = exc.response.headers.get("X-Request-ID")
-                if diagnostic_id is not None:
-                    try:
-                        diagnostic_id = _request_id(diagnostic_id)
-                    except ValueError:
-                        diagnostic_id = None
                 try:
-                    handshake_body = json.loads(exc.response.body)
-                except (ValueError, TypeError):
-                    handshake_body = None
-                raise ProfileServiceError(
-                    "Profile handshake rejected",
-                    status_code=exc.response.status_code,
-                    request_id=diagnostic_id,
-                    error_info=_parse_error_info(
-                        handshake_body.get("error")
-                        if isinstance(handshake_body, dict)
-                        else None
-                    ),
-                ) from None
+                    body = json.loads(exc.response.body)
+                    error = NullgateError(
+                        _text(body["message"]).replace(self._api_key, "[redacted]"),
+                        code=_text(body["code"]),
+                        request_id=_text(body["request_id"]),
+                        status=exc.response.status_code,
+                    )
+                except (ValueError, TypeError, KeyError):
+                    raise NullgateError(
+                        "Profile handshake rejected",
+                        code="transport_error",
+                        status=exc.response.status_code,
+                    ) from None
+                delay = _retry_after(exc.response.headers.get("Retry-After"))
+                if (
+                    error.code != "maintenance"
+                    or attempt == 2
+                    or delay is None
+                    or monotonic() + delay >= deadline
+                ):
+                    raise error from None
+                await asyncio.sleep(delay)
+        raise AssertionError("Unreachable handshake retry")
+
+    async def _run(self) -> None:
+        try:
+            self._websocket = await self._connect()
             await self._send(self._start_message)
             while not self._closing:
                 raw = await self._websocket.recv()
@@ -368,19 +260,25 @@ class ProfileAsync:
                     message = _object(json.loads(raw, object_pairs_hook=_unique_object))
                     self._receive(message)
                 except (ValueError, TypeError, KeyError, binascii.Error):
-                    raise ProfileProtocolError(
-                        "Malformed profile message", request_id=self._request_id
+                    raise NullgateError(
+                        "Malformed profile message",
+                        code="protocol_error",
+                        request_id=self._request_id,
                     ) from None
         except asyncio.CancelledError:
             if not self._closing and self._error is None:
-                self._error = ProfileTransportError(
-                    "Profile connection cancelled", request_id=self._request_id
+                self._error = NullgateError(
+                    "Profile connection cancelled",
+                    code="transport_error",
+                    request_id=self._request_id,
                 )
-        except ProfileError as exc:
+        except NullgateError as exc:
             self._error = exc
         except Exception:
-            self._error = ProfileTransportError(
-                "Profile connection closed unexpectedly", request_id=self._request_id
+            self._error = NullgateError(
+                "Profile connection closed unexpectedly",
+                code="transport_error",
+                request_id=self._request_id,
             )
         finally:
             self._closed = True
@@ -390,15 +288,14 @@ class ProfileAsync:
             if waiter is not None and not waiter.done():
                 waiter.set_exception(
                     self._error
-                    or ProfileClosedError(
-                        "Profile is closed", request_id=self._request_id
+                    or NullgateError(
+                        "Profile is closed", code="closed", request_id=self._request_id
                     )
                 )
             for task in self._network:
                 task.cancel()
             await asyncio.gather(*self._network, return_exceptions=True)
             self._ice_tasks.clear()
-            self._target_errors.clear()
             if self._websocket is not None:
                 with suppress(Exception):
                     await self._websocket.close()
@@ -408,61 +305,18 @@ class ProfileAsync:
     def _receive(self, message: dict[str, object]) -> None:
         kind = message.get("type")
         if kind == "error":
-            if not {"type", "status", "detail"} <= message.keys() or not (
-                message.keys() <= {"type", "status", "detail", "request_id", "error"}
-            ):
+            if message.keys() != {"type", "code", "message", "request_id"}:
                 raise ValueError
-            status, detail = message["status"], message["detail"]
-            if type(status) is not int or not 100 <= status <= 599:
-                raise ValueError
-            detail = _text(detail)
-            if self._api_key:
-                detail = detail.replace(self._api_key, "[redacted]")
-            request_id = message.get("request_id", self._request_id)
-            if request_id is not None:
-                request_id = _request_id(request_id)
-            if (
-                self._request_id is not None
-                and request_id is not None
-                and request_id != self._request_id
-            ):
-                raise ValueError
-            info = _parse_error_info(message.get("error"))
-            raise ProfileServiceError(
-                detail,
-                status_code=status,
-                request_id=request_id,
-                error_info=info,
-                target_error=(
-                    self._target_errors.get(info.command_id)
-                    if info is not None
-                    and info.code == "CLIENT_TRANSPORT_ERROR"
-                    and info.origin == "client"
-                    and info.command_id is not None
-                    else None
-                ),
+            raise NullgateError(
+                _text(message["message"]).replace(self._api_key, "[redacted]"),
+                code=_text(message["code"]),
+                request_id=_text(message["request_id"]),
             )
         if kind == "hello":
-            if (
-                message.keys()
-                not in (
-                    {"type", "state_id", "request_id"},
-                    {"type", "state_id", "request_id", "error_format"},
-                )
-                or self._request_id
-                or (
-                    "error_format" in message
-                    and (
-                        type(message["error_format"]) is not int
-                        or message["error_format"] != 1
-                    )
-                )
-            ):
+            if message.keys() != {"type", "session", "request_id"} or self._request_id:
                 raise ValueError
-            state = _text(message["state_id"])
-            self._request_id = _request_id(message["request_id"])
-            self._error_format = message.get("error_format") == 1
-            self._on_state(state)
+            self._request_id = _text(message["request_id"])
+            self._on_state(_text(message["session"]))
             return
         if self._request_id is None:
             raise ValueError
@@ -520,8 +374,10 @@ class ProfileAsync:
                 raise ValueError
             waiter.set_result(None)
             return
-        raise ProfileProtocolError(
-            "Unknown profile message type", request_id=self._request_id
+        raise NullgateError(
+            "Unknown profile message type",
+            code="protocol_error",
+            request_id=self._request_id,
         )
 
     def _network_done(self, task: asyncio.Task[None]) -> None:
@@ -532,9 +388,11 @@ class ProfileAsync:
         if error is not None and not self._closing and not self._closed:
             self._error = (
                 error
-                if isinstance(error, ProfileError)
-                else ProfileTransportError(
-                    "Profile target operation failed", request_id=self._request_id
+                if isinstance(error, NullgateError)
+                else NullgateError(
+                    "Profile target operation failed",
+                    code="transport_error",
+                    request_id=self._request_id,
                 )
             )
             if self._runner is not None:
@@ -544,15 +402,12 @@ class ProfileAsync:
         try:
             response = await self._target._fetch(request)
             received_at_ms = time_ns() // 1_000_000
-        except Exception as exc:
-            self._target_errors[operation_id] = exc
+        except Exception:
             message: dict[str, object] = {
                 "type": "http.error",
                 "id": operation_id,
                 "detail": "Target request failed",
             }
-            if self._error_format:
-                message["error"] = _transport_cause(exc)._as_dict()
             await self._send(message)
             return
         await self._send(
@@ -591,11 +446,14 @@ class ProfileAsync:
         self, at_ms: int | None = None, *, persisted: bool = False
     ) -> None:
         if at_ms is not None and (type(at_ms) is not int or at_ms < 0):
-            raise ValueError(
-                "pagehide.at_ms must be a nonnegative Unix millisecond time"
+            raise NullgateError(
+                "pagehide.at_ms must be a nonnegative Unix millisecond time",
+                code="invalid_request",
             )
         if type(persisted) is not bool:
-            raise TypeError("pagehide.persisted must be bool")
+            raise NullgateError(
+                "pagehide.persisted must be bool", code="invalid_request"
+            )
         try:
             async with self._pagehides:
                 self.raise_for_error()
@@ -630,10 +488,6 @@ class ProfileAsync:
         except asyncio.CancelledError:
             await self.aclose()
             raise
-
-    async def report(self) -> bool:
-        """Best-effort analytics delivery, not acceptance, retry or refund."""
-        return await self._reporter(self.request_id)
 
     async def _finish_close(self) -> None:
         self._closing = True
@@ -694,11 +548,12 @@ class _ProfileLoop:
     def run(self, coroutine: Coroutine[object, object, _T]) -> _T:
         if not self._thread.is_alive() or self._loop.is_closed():
             coroutine.close()
-            raise ProfileClosedError("Profile event loop is closed")
+            raise NullgateError("Nullgate is closed", code="closed")
         if current_thread() is self._thread:
             coroutine.close()
-            raise RuntimeError(
-                "Synchronous profile methods cannot run on their own loop"
+            raise NullgateError(
+                "Synchronous methods cannot run on their own event loop",
+                code="invalid_request",
             )
         future = asyncio.run_coroutine_threadsafe(coroutine, self._loop)
         try:
@@ -723,11 +578,9 @@ class Profile:
         self,
         active: ProfileAsync,
         loop: _ProfileLoop,
-        reporter: Callable[[str], bool],
     ) -> None:
         self._active = active
         self._loop = loop
-        self._reporter = reporter
 
     @property
     def request_id(self) -> str:
@@ -742,7 +595,7 @@ class Profile:
         return self._active.is_collected
 
     @property
-    def error(self) -> ProfileError | None:
+    def error(self) -> NullgateError | None:
         return self._active.error
 
     def raise_for_error(self) -> None:
@@ -763,9 +616,6 @@ class Profile:
         except BaseException:
             self.close()
             raise
-
-    def report(self) -> bool:
-        return self._reporter(self.request_id)
 
     def close(self) -> None:
         if not self._active._close_task or not self._active._close_task.done():

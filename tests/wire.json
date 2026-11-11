@@ -1,0 +1,2347 @@
+{
+  "akamai": {
+    "openapi": "3.1.0",
+    "info": {
+      "title": "Akamai",
+      "version": "1.0.0"
+    },
+    "paths": {
+      "/akamai/sensor": {
+        "post": {
+          "tags": [
+            "Akamai"
+          ],
+          "summary": "Sensor",
+          "operationId": "sensor_akamai_sensor_post",
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SensorRequest"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "description": "Successful Response",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/Generated"
+                  },
+                  "example": {
+                    "request": {
+                      "url": "https://shop.example/script.js",
+                      "body": "{\"sensor_data\":\"generated value\"}",
+                      "headers": {
+                        "content-type": "text/plain;charset=UTF-8",
+                        "accept-language": "en-US,en;q=0.9"
+                      },
+                      "send_at": 1800000000.5
+                    },
+                    "session": "continued-session",
+                    "request_id": "request-id"
+                  }
+                }
+              }
+            },
+            "400": {
+              "description": "Bad Request",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/ErrorResponse"
+                  }
+                }
+              }
+            },
+            "401": {
+              "description": "Unauthorized",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/ErrorResponse"
+                  }
+                }
+              }
+            },
+            "402": {
+              "description": "Payment Required",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/ErrorResponse"
+                  }
+                }
+              }
+            },
+            "403": {
+              "description": "Forbidden",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/ErrorResponse"
+                  }
+                }
+              }
+            },
+            "404": {
+              "description": "Not Found",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/ErrorResponse"
+                  }
+                }
+              }
+            },
+            "409": {
+              "description": "Conflict",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/ErrorResponse"
+                  }
+                }
+              }
+            },
+            "422": {
+              "description": "Unprocessable Entity",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/ErrorResponse"
+                  }
+                }
+              }
+            },
+            "429": {
+              "description": "Too Many Requests",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/ErrorResponse"
+                  }
+                }
+              }
+            },
+            "500": {
+              "description": "Internal Server Error",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/ErrorResponse"
+                  }
+                }
+              }
+            },
+            "502": {
+              "description": "Bad Gateway",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/ErrorResponse"
+                  }
+                }
+              }
+            },
+            "503": {
+              "description": "Service Unavailable",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/ErrorResponse"
+                  }
+                }
+              }
+            }
+          },
+          "security": [
+            {
+              "AccountBearer": []
+            }
+          ]
+        }
+      },
+      "/akamai/pixel": {
+        "post": {
+          "tags": [
+            "Akamai"
+          ],
+          "summary": "Pixel",
+          "operationId": "pixel_akamai_pixel_post",
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PixelRequest"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "description": "Successful Response",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/Generated"
+                  },
+                  "example": {
+                    "request": {
+                      "url": "https://shop.example/pixel",
+                      "body": "value=generated%20value",
+                      "headers": {
+                        "content-type": "application/x-www-form-urlencoded",
+                        "accept-language": "en-US,en;q=0.9"
+                      },
+                      "send_at": 1800000000.5
+                    },
+                    "session": "continued-session",
+                    "request_id": "request-id"
+                  }
+                }
+              }
+            },
+            "400": {
+              "description": "Bad Request",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/ErrorResponse"
+                  }
+                }
+              }
+            },
+            "401": {
+              "description": "Unauthorized",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/ErrorResponse"
+                  }
+                }
+              }
+            },
+            "402": {
+              "description": "Payment Required",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/ErrorResponse"
+                  }
+                }
+              }
+            },
+            "403": {
+              "description": "Forbidden",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/ErrorResponse"
+                  }
+                }
+              }
+            },
+            "404": {
+              "description": "Not Found",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/ErrorResponse"
+                  }
+                }
+              }
+            },
+            "409": {
+              "description": "Conflict",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/ErrorResponse"
+                  }
+                }
+              }
+            },
+            "422": {
+              "description": "Unprocessable Entity",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/ErrorResponse"
+                  }
+                }
+              }
+            },
+            "429": {
+              "description": "Too Many Requests",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/ErrorResponse"
+                  }
+                }
+              }
+            },
+            "500": {
+              "description": "Internal Server Error",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/ErrorResponse"
+                  }
+                }
+              }
+            },
+            "502": {
+              "description": "Bad Gateway",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/ErrorResponse"
+                  }
+                }
+              }
+            },
+            "503": {
+              "description": "Service Unavailable",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/ErrorResponse"
+                  }
+                }
+              }
+            }
+          },
+          "security": [
+            {
+              "AccountBearer": []
+            }
+          ]
+        }
+      },
+      "/akamai/sbsd": {
+        "post": {
+          "tags": [
+            "Akamai"
+          ],
+          "summary": "Sbsd",
+          "operationId": "sbsd_akamai_sbsd_post",
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SbsdRequest"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "description": "Successful Response",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/Generated"
+                  },
+                  "example": {
+                    "request": {
+                      "url": "https://shop.example/sbsd",
+                      "body": "{\"value\":\"generated value\"}",
+                      "headers": {
+                        "content-type": "application/json",
+                        "accept-language": "en-US,en;q=0.9"
+                      },
+                      "send_at": 1800000000.5
+                    },
+                    "session": "continued-session",
+                    "request_id": "request-id"
+                  }
+                }
+              }
+            },
+            "400": {
+              "description": "Bad Request",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/ErrorResponse"
+                  }
+                }
+              }
+            },
+            "401": {
+              "description": "Unauthorized",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/ErrorResponse"
+                  }
+                }
+              }
+            },
+            "402": {
+              "description": "Payment Required",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/ErrorResponse"
+                  }
+                }
+              }
+            },
+            "403": {
+              "description": "Forbidden",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/ErrorResponse"
+                  }
+                }
+              }
+            },
+            "404": {
+              "description": "Not Found",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/ErrorResponse"
+                  }
+                }
+              }
+            },
+            "409": {
+              "description": "Conflict",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/ErrorResponse"
+                  }
+                }
+              }
+            },
+            "422": {
+              "description": "Unprocessable Entity",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/ErrorResponse"
+                  }
+                }
+              }
+            },
+            "429": {
+              "description": "Too Many Requests",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/ErrorResponse"
+                  }
+                }
+              }
+            },
+            "500": {
+              "description": "Internal Server Error",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/ErrorResponse"
+                  }
+                }
+              }
+            },
+            "502": {
+              "description": "Bad Gateway",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/ErrorResponse"
+                  }
+                }
+              }
+            },
+            "503": {
+              "description": "Service Unavailable",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/ErrorResponse"
+                  }
+                }
+              }
+            }
+          },
+          "security": [
+            {
+              "AccountBearer": []
+            }
+          ]
+        }
+      }
+    },
+    "components": {
+      "schemas": {
+        "ErrorResponse": {
+          "properties": {
+            "code": {
+              "type": "string",
+              "title": "Code",
+              "description": "The error category used to choose your next action."
+            },
+            "message": {
+              "type": "string",
+              "title": "Message",
+              "description": "A safe explanation of the error."
+            },
+            "request_id": {
+              "type": "string",
+              "title": "Request Id",
+              "description": "The identifier to include when contacting support."
+            }
+          },
+          "type": "object",
+          "required": [
+            "code",
+            "message",
+            "request_id"
+          ],
+          "title": "ErrorResponse"
+        },
+        "Generated": {
+          "properties": {
+            "request": {
+              "$ref": "#/components/schemas/TargetRequest",
+              "description": "The complete POST request to send to the target site."
+            },
+            "session": {
+              "type": "string",
+              "title": "Session",
+              "description": "The session to include in your next generation request."
+            },
+            "request_id": {
+              "type": "string",
+              "title": "Request Id",
+              "description": "The identifier to include when contacting support."
+            }
+          },
+          "type": "object",
+          "required": [
+            "request",
+            "session",
+            "request_id"
+          ],
+          "title": "Generated"
+        },
+        "Input": {
+          "properties": {
+            "attributes": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "type": "object",
+              "title": "Attributes",
+              "description": "The observed attributes used to identify the input."
+            },
+            "value": {
+              "$ref": "#/components/schemas/InputValue",
+              "description": "The input value summaries, without the original text."
+            },
+            "selector": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 1
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Selector",
+              "description": "The CSS selector identifying the observed input."
+            }
+          },
+          "additionalProperties": false,
+          "type": "object",
+          "required": [
+            "attributes",
+            "value"
+          ],
+          "title": "Input"
+        },
+        "InputValue": {
+          "properties": {
+            "length": {
+              "type": "integer",
+              "minimum": 0.0,
+              "title": "Length",
+              "description": "The observed input length."
+            },
+            "hash": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Hash",
+              "description": "The SHA-256 hash of the observed input value."
+            },
+            "counts": {
+              "anyOf": [
+                {
+                  "prefixItems": [
+                    {
+                      "type": "integer",
+                      "minimum": 0.0
+                    },
+                    {
+                      "type": "integer",
+                      "minimum": 0.0
+                    },
+                    {
+                      "type": "integer",
+                      "minimum": 0.0
+                    },
+                    {
+                      "type": "integer",
+                      "minimum": 0.0
+                    }
+                  ],
+                  "type": "array",
+                  "maxItems": 4,
+                  "minItems": 4
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Counts",
+              "description": "The four observed character category counts."
+            },
+            "hash31": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "exclusiveMaximum": 2147483648.0,
+                  "minimum": -2147483648.0
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Hash31",
+              "description": "The observed signed 31-based hash of the input value."
+            },
+            "trimmed_hash31": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "exclusiveMaximum": 2147483648.0,
+                  "minimum": -2147483648.0
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Trimmed Hash31",
+              "description": "The observed signed 31-based hash after trimming the input value."
+            },
+            "trimmed_length": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 0.0
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Trimmed Length",
+              "description": "The observed input length after trimming."
+            }
+          },
+          "additionalProperties": false,
+          "type": "object",
+          "required": [
+            "length",
+            "hash"
+          ],
+          "title": "InputValue"
+        },
+        "PixelRequest": {
+          "properties": {
+            "url": {
+              "type": "string",
+              "title": "Url",
+              "description": "The target page URL you observed."
+            },
+            "html": {
+              "type": "string",
+              "title": "Html",
+              "description": "The complete target page HTML you observed."
+            },
+            "document_id": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Document Id",
+              "description": "An advanced identifier kept stable for this loaded document."
+            },
+            "started_at_ms": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 0.0
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Started At Ms",
+              "description": "The document start time in Unix milliseconds."
+            },
+            "profile": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Profile",
+              "description": "Your browser identity, kept stable for each target account."
+            },
+            "session": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Session",
+              "description": "The previous response session, or null to start a new session."
+            },
+            "user_agent": {
+              "type": "string",
+              "minLength": 1,
+              "title": "User Agent",
+              "description": "The browser User-Agent you send to the target site."
+            },
+            "timezone": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Timezone",
+              "description": "The browser timezone as an IANA name."
+            },
+            "script_url": {
+              "type": "string",
+              "minLength": 1,
+              "title": "Script Url",
+              "description": "The script URL observed on the page."
+            },
+            "script": {
+              "type": "string",
+              "minLength": 1,
+              "title": "Script",
+              "description": "The complete script source observed on the page."
+            },
+            "challenge": {
+              "type": "string",
+              "pattern": "^\\d+$",
+              "title": "Challenge",
+              "description": "The pixel challenge observed in the page HTML."
+            }
+          },
+          "additionalProperties": false,
+          "type": "object",
+          "required": [
+            "url",
+            "html",
+            "profile",
+            "user_agent",
+            "script_url",
+            "script",
+            "challenge"
+          ],
+          "title": "PixelRequest",
+          "examples": [
+            {
+              "challenge": "123",
+              "html": "<html></html>",
+              "profile": "00000000-0000-0000-0000-00000000004a",
+              "script": "/* complete observed script source */",
+              "script_url": "https://shop.example/script.js",
+              "url": "https://shop.example/login",
+              "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36"
+            }
+          ]
+        },
+        "SbsdRequest": {
+          "properties": {
+            "url": {
+              "type": "string",
+              "title": "Url",
+              "description": "The target page URL you observed."
+            },
+            "html": {
+              "type": "string",
+              "title": "Html",
+              "description": "The complete target page HTML you observed."
+            },
+            "document_id": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Document Id",
+              "description": "An advanced identifier kept stable for this loaded document."
+            },
+            "started_at_ms": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 0.0
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Started At Ms",
+              "description": "The document start time in Unix milliseconds."
+            },
+            "profile": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Profile",
+              "description": "Your browser identity, kept stable for each target account."
+            },
+            "session": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Session",
+              "description": "The previous response session, or null to start a new session."
+            },
+            "user_agent": {
+              "type": "string",
+              "minLength": 1,
+              "title": "User Agent",
+              "description": "The browser User-Agent you send to the target site."
+            },
+            "timezone": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Timezone",
+              "description": "The browser timezone as an IANA name."
+            },
+            "script_url": {
+              "type": "string",
+              "minLength": 1,
+              "title": "Script Url",
+              "description": "The script URL observed on the page."
+            },
+            "script": {
+              "type": "string",
+              "minLength": 1,
+              "title": "Script",
+              "description": "The complete script source observed on the page."
+            },
+            "cookies": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "type": "object",
+              "title": "Cookies",
+              "description": "The cookies you send to the target site."
+            }
+          },
+          "additionalProperties": false,
+          "type": "object",
+          "required": [
+            "url",
+            "html",
+            "profile",
+            "user_agent",
+            "script_url",
+            "script"
+          ],
+          "title": "SbsdRequest",
+          "examples": [
+            {
+              "cookies": {},
+              "html": "<html></html>",
+              "profile": "00000000-0000-0000-0000-00000000004a",
+              "script": "/* complete observed script source */",
+              "script_url": "https://shop.example/script.js",
+              "url": "https://shop.example/login",
+              "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36"
+            }
+          ]
+        },
+        "SensorRequest": {
+          "properties": {
+            "url": {
+              "type": "string",
+              "title": "Url",
+              "description": "The target page URL you observed."
+            },
+            "html": {
+              "type": "string",
+              "title": "Html",
+              "description": "The complete target page HTML you observed."
+            },
+            "document_id": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Document Id",
+              "description": "An advanced identifier kept stable for this loaded document."
+            },
+            "started_at_ms": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 0.0
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Started At Ms",
+              "description": "The document start time in Unix milliseconds."
+            },
+            "profile": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Profile",
+              "description": "Your browser identity, kept stable for each target account."
+            },
+            "session": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Session",
+              "description": "The previous response session, or null to start a new session."
+            },
+            "user_agent": {
+              "type": "string",
+              "minLength": 1,
+              "title": "User Agent",
+              "description": "The browser User-Agent you send to the target site."
+            },
+            "timezone": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Timezone",
+              "description": "The browser timezone as an IANA name."
+            },
+            "script_url": {
+              "type": "string",
+              "minLength": 1,
+              "title": "Script Url",
+              "description": "The script URL observed on the page."
+            },
+            "script": {
+              "type": "string",
+              "minLength": 1,
+              "title": "Script",
+              "description": "The complete script source observed on the page."
+            },
+            "cookies": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "type": "object",
+              "title": "Cookies",
+              "description": "The cookies you send to the target site."
+            },
+            "inputs": {
+              "anyOf": [
+                {
+                  "items": {
+                    "$ref": "#/components/schemas/Input"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Inputs",
+              "description": "The observed input summaries."
+            },
+            "actions": {
+              "anyOf": [
+                {
+                  "items": {
+                    "additionalProperties": true,
+                    "type": "object"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Actions",
+              "description": "The observed browser actions in order."
+            }
+          },
+          "additionalProperties": false,
+          "type": "object",
+          "required": [
+            "url",
+            "html",
+            "profile",
+            "user_agent",
+            "script_url",
+            "script"
+          ],
+          "title": "SensorRequest",
+          "examples": [
+            {
+              "actions": [],
+              "cookies": {},
+              "html": "<html></html>",
+              "inputs": [],
+              "profile": "00000000-0000-0000-0000-00000000004a",
+              "script": "/* complete observed script source */",
+              "script_url": "https://shop.example/script.js",
+              "url": "https://shop.example/login",
+              "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36"
+            }
+          ]
+        },
+        "TargetRequest": {
+          "properties": {
+            "url": {
+              "type": "string",
+              "title": "Url",
+              "description": "The URL to POST to on the target site."
+            },
+            "body": {
+              "type": "string",
+              "title": "Body",
+              "description": "The exact text to send as the POST body."
+            },
+            "headers": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "type": "object",
+              "title": "Headers",
+              "description": "The headers to send with the target request."
+            },
+            "send_at": {
+              "type": "number",
+              "title": "Send At",
+              "description": "The earliest target POST time in Unix seconds."
+            }
+          },
+          "type": "object",
+          "required": [
+            "url",
+            "body",
+            "headers",
+            "send_at"
+          ],
+          "title": "TargetRequest"
+        }
+      },
+      "securitySchemes": {
+        "AccountBearer": {
+          "type": "http",
+          "description": "Secret account key; the browser-profile UUID is separate.",
+          "scheme": "bearer",
+          "bearerFormat": "ng_\u2026"
+        }
+      }
+    }
+  },
+  "amazon": {
+    "openapi": "3.1.0",
+    "info": {
+      "title": "Amazon",
+      "version": "1.0.0"
+    },
+    "paths": {
+      "/amazon/fwcim": {
+        "post": {
+          "tags": [
+            "Amazon"
+          ],
+          "summary": "Fwcim",
+          "operationId": "fwcim_amazon_fwcim_post",
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FwcimRequest"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "description": "Successful Response",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/Generated"
+                  }
+                }
+              }
+            },
+            "400": {
+              "description": "Bad Request",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/ErrorResponse"
+                  }
+                }
+              }
+            },
+            "401": {
+              "description": "Unauthorized",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/ErrorResponse"
+                  }
+                }
+              }
+            },
+            "402": {
+              "description": "Payment Required",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/ErrorResponse"
+                  }
+                }
+              }
+            },
+            "403": {
+              "description": "Forbidden",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/ErrorResponse"
+                  }
+                }
+              }
+            },
+            "404": {
+              "description": "Not Found",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/ErrorResponse"
+                  }
+                }
+              }
+            },
+            "409": {
+              "description": "Conflict",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/ErrorResponse"
+                  }
+                }
+              }
+            },
+            "422": {
+              "description": "Unprocessable Entity",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/ErrorResponse"
+                  }
+                }
+              }
+            },
+            "429": {
+              "description": "Too Many Requests",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/ErrorResponse"
+                  }
+                }
+              }
+            },
+            "500": {
+              "description": "Internal Server Error",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/ErrorResponse"
+                  }
+                }
+              }
+            },
+            "502": {
+              "description": "Bad Gateway",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/ErrorResponse"
+                  }
+                }
+              }
+            },
+            "503": {
+              "description": "Service Unavailable",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/ErrorResponse"
+                  }
+                }
+              }
+            }
+          },
+          "security": [
+            {
+              "AccountBearer": []
+            }
+          ]
+        }
+      }
+    },
+    "components": {
+      "schemas": {
+        "ErrorResponse": {
+          "properties": {
+            "code": {
+              "type": "string",
+              "title": "Code",
+              "description": "The error category used to choose your next action."
+            },
+            "message": {
+              "type": "string",
+              "title": "Message",
+              "description": "A safe explanation of the error."
+            },
+            "request_id": {
+              "type": "string",
+              "title": "Request Id",
+              "description": "The identifier to include when contacting support."
+            }
+          },
+          "type": "object",
+          "required": [
+            "code",
+            "message",
+            "request_id"
+          ],
+          "title": "ErrorResponse"
+        },
+        "FwcimRequest": {
+          "properties": {
+            "url": {
+              "type": "string",
+              "title": "Url",
+              "description": "The target page URL you observed."
+            },
+            "html": {
+              "type": "string",
+              "title": "Html",
+              "description": "The complete target page HTML you observed."
+            },
+            "referrer": {
+              "type": "string",
+              "title": "Referrer",
+              "description": "The page URL that referred the browser to this document.",
+              "default": ""
+            },
+            "history_length": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 1.0
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "History Length",
+              "description": "The observed number of browser history entries."
+            },
+            "document_id": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Document Id",
+              "description": "An advanced identifier kept stable for this loaded document."
+            },
+            "started_at_ms": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 0.0
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Started At Ms",
+              "description": "The document start time in Unix milliseconds."
+            },
+            "profile": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Profile",
+              "description": "Your browser identity, kept stable for each target account."
+            },
+            "session": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Session",
+              "description": "The previous response session, or null to start a new session."
+            },
+            "user_agent": {
+              "type": "string",
+              "minLength": 1,
+              "title": "User Agent",
+              "description": "The browser User-Agent you send to the target site."
+            },
+            "timezone": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Timezone",
+              "description": "The browser timezone as an IANA name."
+            },
+            "cookies": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "type": "object",
+              "title": "Cookies",
+              "description": "The cookies you send to the target site."
+            },
+            "form_selector": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 1
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Form Selector",
+              "description": "The CSS selector for the observed form."
+            },
+            "inputs": {
+              "anyOf": [
+                {
+                  "items": {
+                    "$ref": "#/components/schemas/Input"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Inputs",
+              "description": "The observed input summaries."
+            },
+            "actions": {
+              "anyOf": [
+                {
+                  "items": {
+                    "additionalProperties": true,
+                    "type": "object"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Actions",
+              "description": "The observed browser actions in order."
+            },
+            "submitted": {
+              "type": "boolean",
+              "title": "Submitted",
+              "description": "Whether the observed form was submitted.",
+              "default": true
+            },
+            "performance_timing": {
+              "anyOf": [
+                {
+                  "additionalProperties": {
+                    "type": "integer",
+                    "minimum": 0.0
+                  },
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Performance Timing",
+              "description": "The observed navigation timing values in milliseconds."
+            }
+          },
+          "additionalProperties": false,
+          "type": "object",
+          "required": [
+            "url",
+            "html",
+            "profile",
+            "user_agent"
+          ],
+          "title": "FwcimRequest",
+          "examples": [
+            {
+              "form_selector": "#login",
+              "html": "<form id=\"login\"><input id=\"email\"></form>",
+              "performance_timing": {
+                "domInteractive": 1800000000021,
+                "fetchStart": 1800000000000,
+                "loadEventEnd": 1800000000022,
+                "navigationStart": 1800000000000,
+                "responseEnd": 1800000000020,
+                "responseStart": 1800000000010
+              },
+              "profile": "00000000-0000-0000-0000-00000000004a",
+              "url": "https://shop.example/login",
+              "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36"
+            }
+          ]
+        },
+        "Generated": {
+          "properties": {
+            "metadata1": {
+              "type": "string",
+              "title": "Metadata1",
+              "description": "The generated metadata1 value to include in the target form."
+            },
+            "send_at": {
+              "type": "number",
+              "title": "Send At",
+              "description": "The earliest target submission time in Unix seconds."
+            },
+            "headers": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "type": "object",
+              "title": "Headers",
+              "description": "The headers to send with the target form."
+            },
+            "session": {
+              "type": "string",
+              "title": "Session",
+              "description": "The session to include in your next generation request."
+            },
+            "request_id": {
+              "type": "string",
+              "title": "Request Id",
+              "description": "The identifier to include when contacting support."
+            }
+          },
+          "type": "object",
+          "required": [
+            "metadata1",
+            "send_at",
+            "headers",
+            "session",
+            "request_id"
+          ],
+          "title": "Generated",
+          "examples": [
+            {
+              "headers": {
+                "Accept-Language": "en-US,en;q=0.9"
+              },
+              "metadata1": "generated value",
+              "request_id": "request-id",
+              "send_at": 1800000000.5,
+              "session": "continued-session"
+            }
+          ]
+        },
+        "Geometry": {
+          "properties": {
+            "left": {
+              "type": "number",
+              "title": "Left",
+              "description": "The observed element's left position in CSS pixels.",
+              "default": 0
+            },
+            "top": {
+              "type": "number",
+              "title": "Top",
+              "description": "The observed element's top position in CSS pixels.",
+              "default": 0
+            },
+            "width": {
+              "type": "number",
+              "minimum": 0.0,
+              "title": "Width",
+              "description": "The observed element width in CSS pixels."
+            },
+            "height": {
+              "type": "number",
+              "minimum": 0.0,
+              "title": "Height",
+              "description": "The observed element height in CSS pixels."
+            }
+          },
+          "additionalProperties": false,
+          "type": "object",
+          "required": [
+            "width",
+            "height"
+          ],
+          "title": "Geometry"
+        },
+        "Input": {
+          "properties": {
+            "attributes": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "type": "object",
+              "title": "Attributes",
+              "description": "The observed input's id and name attributes only."
+            },
+            "value": {
+              "$ref": "#/components/schemas/InputValue",
+              "description": "Redacted observations of the input value."
+            },
+            "checksum": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "exclusiveMaximum": 4294967296.0,
+                  "minimum": 0.0
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Checksum",
+              "description": "The observed unsigned 32-bit input checksum."
+            },
+            "selector": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 1
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Selector",
+              "description": "The CSS selector for this observed input."
+            },
+            "geometry": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/Geometry"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "The observed input element bounds."
+            },
+            "text": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Text",
+              "description": "Optional nonpassword text observed by the collector canvas."
+            }
+          },
+          "additionalProperties": false,
+          "type": "object",
+          "required": [
+            "attributes",
+            "value"
+          ],
+          "title": "Input"
+        },
+        "InputValue": {
+          "properties": {
+            "length": {
+              "type": "integer",
+              "minimum": 0.0,
+              "title": "Length",
+              "description": "The observed input value length."
+            },
+            "hash": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Hash",
+              "description": "The lowercase SHA-256 digest of the observed value."
+            },
+            "counts": {
+              "anyOf": [
+                {
+                  "prefixItems": [
+                    {
+                      "type": "integer",
+                      "minimum": 0.0
+                    },
+                    {
+                      "type": "integer",
+                      "minimum": 0.0
+                    },
+                    {
+                      "type": "integer",
+                      "minimum": 0.0
+                    },
+                    {
+                      "type": "integer",
+                      "minimum": 0.0
+                    }
+                  ],
+                  "type": "array",
+                  "maxItems": 4,
+                  "minItems": 4
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Counts",
+              "description": "The four observed character-class counts."
+            },
+            "hash31": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "exclusiveMaximum": 2147483648.0,
+                  "minimum": -2147483648.0
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Hash31",
+              "description": "The observed signed 32-bit value hash."
+            },
+            "trimmed_hash31": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "exclusiveMaximum": 2147483648.0,
+                  "minimum": -2147483648.0
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Trimmed Hash31",
+              "description": "The observed signed 32-bit hash after trimming."
+            },
+            "trimmed_length": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 0.0
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Trimmed Length",
+              "description": "The observed value length after trimming."
+            }
+          },
+          "additionalProperties": false,
+          "type": "object",
+          "required": [
+            "length",
+            "hash"
+          ],
+          "title": "InputValue"
+        }
+      },
+      "securitySchemes": {
+        "AccountBearer": {
+          "type": "http",
+          "description": "Secret account key; the browser-profile UUID is separate.",
+          "scheme": "bearer",
+          "bearerFormat": "ng_\u2026"
+        }
+      }
+    }
+  },
+  "accounts": {
+    "openapi": "3.1.0",
+    "info": {
+      "title": "Accounts",
+      "version": "1.0.0"
+    },
+    "paths": {
+      "/account": {
+        "get": {
+          "tags": [
+            "Accounts"
+          ],
+          "summary": "Me",
+          "operationId": "me_account_get",
+          "responses": {
+            "200": {
+              "description": "Successful Response",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/Profile"
+                  }
+                }
+              }
+            },
+            "400": {
+              "description": "Bad Request",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/ErrorResponse"
+                  }
+                }
+              }
+            },
+            "401": {
+              "description": "Unauthorized",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/ErrorResponse"
+                  }
+                }
+              }
+            },
+            "402": {
+              "description": "Payment Required",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/ErrorResponse"
+                  }
+                }
+              }
+            },
+            "403": {
+              "description": "Forbidden",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/ErrorResponse"
+                  }
+                }
+              }
+            },
+            "404": {
+              "description": "Not Found",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/ErrorResponse"
+                  }
+                }
+              }
+            },
+            "409": {
+              "description": "Conflict",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/ErrorResponse"
+                  }
+                }
+              }
+            },
+            "422": {
+              "description": "Unprocessable Entity",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/ErrorResponse"
+                  }
+                }
+              }
+            },
+            "429": {
+              "description": "Too Many Requests",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/ErrorResponse"
+                  }
+                }
+              }
+            },
+            "500": {
+              "description": "Internal Server Error",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/ErrorResponse"
+                  }
+                }
+              }
+            },
+            "502": {
+              "description": "Bad Gateway",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/ErrorResponse"
+                  }
+                }
+              }
+            },
+            "503": {
+              "description": "Service Unavailable",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/ErrorResponse"
+                  }
+                }
+              }
+            }
+          },
+          "security": [
+            {
+              "CustomerKey": []
+            }
+          ]
+        }
+      },
+      "/account/usage": {
+        "get": {
+          "tags": [
+            "Accounts"
+          ],
+          "summary": "Usage",
+          "description": "Start inclusive, end exclusive. Ranges round outward to UTC hours. Empty buckets are omitted. The current hour is provisional.",
+          "operationId": "usage_account_usage_get",
+          "security": [
+            {
+              "CustomerKey": []
+            }
+          ],
+          "parameters": [
+            {
+              "name": "start",
+              "in": "query",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "The inclusive start timestamp, including its timezone.",
+                "examples": [
+                  "2026-11-01T00:00:00Z"
+                ],
+                "title": "Start"
+              },
+              "description": "The inclusive start timestamp, including its timezone."
+            },
+            {
+              "name": "end",
+              "in": "query",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "The exclusive end timestamp, including its timezone.",
+                "examples": [
+                  "2026-11-02T00:00:00Z"
+                ],
+                "title": "End"
+              },
+              "description": "The exclusive end timestamp, including its timezone."
+            },
+            {
+              "name": "interval",
+              "in": "query",
+              "required": false,
+              "schema": {
+                "enum": [
+                  "hour",
+                  "day"
+                ],
+                "type": "string",
+                "description": "The size of each usage bucket.",
+                "examples": [
+                  "day"
+                ],
+                "default": "hour",
+                "title": "Interval"
+              },
+              "description": "The size of each usage bucket."
+            }
+          ],
+          "responses": {
+            "200": {
+              "description": "Successful Response",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/UsageResponse"
+                  }
+                }
+              }
+            },
+            "400": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/ErrorResponse"
+                  }
+                }
+              },
+              "description": "Bad Request"
+            },
+            "401": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/ErrorResponse"
+                  }
+                }
+              },
+              "description": "Unauthorized"
+            },
+            "402": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/ErrorResponse"
+                  }
+                }
+              },
+              "description": "Payment Required"
+            },
+            "403": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/ErrorResponse"
+                  }
+                }
+              },
+              "description": "Forbidden"
+            },
+            "404": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/ErrorResponse"
+                  }
+                }
+              },
+              "description": "Not Found"
+            },
+            "409": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/ErrorResponse"
+                  }
+                }
+              },
+              "description": "Conflict"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/ErrorResponse"
+                  }
+                }
+              },
+              "description": "Unprocessable Entity"
+            },
+            "429": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/ErrorResponse"
+                  }
+                }
+              },
+              "description": "Too Many Requests"
+            },
+            "500": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/ErrorResponse"
+                  }
+                }
+              },
+              "description": "Internal Server Error"
+            },
+            "502": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/ErrorResponse"
+                  }
+                }
+              },
+              "description": "Bad Gateway"
+            },
+            "503": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/ErrorResponse"
+                  }
+                }
+              },
+              "description": "Service Unavailable"
+            }
+          }
+        }
+      }
+    },
+    "components": {
+      "schemas": {
+        "ErrorResponse": {
+          "properties": {
+            "code": {
+              "type": "string",
+              "title": "Code",
+              "description": "The error category used to choose your next action."
+            },
+            "message": {
+              "type": "string",
+              "title": "Message",
+              "description": "A safe explanation of the error."
+            },
+            "request_id": {
+              "type": "string",
+              "title": "Request Id",
+              "description": "The identifier to include when contacting support."
+            }
+          },
+          "type": "object",
+          "required": [
+            "code",
+            "message",
+            "request_id"
+          ],
+          "title": "ErrorResponse"
+        },
+        "Profile": {
+          "properties": {
+            "id": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Id",
+              "description": "Your account identifier."
+            },
+            "balance": {
+              "type": "string",
+              "pattern": "^-?\\d+\\.\\d{6}$",
+              "title": "Balance",
+              "description": "Your remaining balance in USD."
+            },
+            "currency": {
+              "type": "string",
+              "const": "USD",
+              "title": "Currency",
+              "description": "The currency used for balances and charges.",
+              "default": "USD"
+            },
+            "created_at": {
+              "type": "string",
+              "format": "date-time",
+              "title": "Created At",
+              "description": "The time your account was created."
+            },
+            "active": {
+              "type": "boolean",
+              "title": "Active",
+              "description": "Whether your account may use paid operations."
+            },
+            "prices_per_1000": {
+              "additionalProperties": {
+                "type": "string",
+                "pattern": "^-?\\d+\\.\\d{6}$"
+              },
+              "propertyNames": {
+                "enum": [
+                  "akamai.pixel",
+                  "akamai.sensor",
+                  "akamai.sbsd",
+                  "threatmetrix.profile",
+                  "amazon.fwcim"
+                ]
+              },
+              "type": "object",
+              "title": "Prices Per 1000",
+              "description": "The USD price per thousand operations for each product."
+            },
+            "usage": {
+              "items": {
+                "$ref": "#/components/schemas/UsageTotal"
+              },
+              "type": "array",
+              "title": "Usage",
+              "description": "Your lifetime usage and charges by product operation."
+            }
+          },
+          "type": "object",
+          "required": [
+            "id",
+            "balance",
+            "created_at",
+            "active",
+            "prices_per_1000",
+            "usage"
+          ],
+          "title": "Profile",
+          "examples": [
+            {
+              "active": true,
+              "balance": "1.000000",
+              "created_at": "2026-11-01T00:00:00Z",
+              "currency": "USD",
+              "id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+              "prices_per_1000": {
+                "akamai.sensor": "2.500000"
+              },
+              "usage": []
+            }
+          ]
+        },
+        "UsageBucket": {
+          "properties": {
+            "operation": {
+              "type": "string",
+              "enum": [
+                "akamai.pixel",
+                "akamai.sensor",
+                "akamai.sbsd",
+                "threatmetrix.profile",
+                "amazon.fwcim"
+              ],
+              "title": "Operation",
+              "description": "The product operation charged for this usage."
+            },
+            "requests": {
+              "type": "integer",
+              "title": "Requests",
+              "description": "The number of charged operations."
+            },
+            "amount": {
+              "type": "string",
+              "pattern": "^-?\\d+\\.\\d{6}$",
+              "title": "Amount",
+              "description": "The total charge in USD."
+            },
+            "start": {
+              "type": "string",
+              "format": "date-time",
+              "title": "Start",
+              "description": "The inclusive UTC start of this usage bucket."
+            }
+          },
+          "type": "object",
+          "required": [
+            "operation",
+            "requests",
+            "amount",
+            "start"
+          ],
+          "title": "UsageBucket"
+        },
+        "UsageResponse": {
+          "properties": {
+            "currency": {
+              "type": "string",
+              "const": "USD",
+              "title": "Currency",
+              "description": "The currency used for charges.",
+              "default": "USD"
+            },
+            "interval": {
+              "type": "string",
+              "enum": [
+                "hour",
+                "day"
+              ],
+              "title": "Interval",
+              "description": "The size of each usage bucket."
+            },
+            "start": {
+              "type": "string",
+              "format": "date-time",
+              "title": "Start",
+              "description": "The inclusive UTC start of the returned range."
+            },
+            "end": {
+              "type": "string",
+              "format": "date-time",
+              "title": "End",
+              "description": "The exclusive UTC end of the returned range."
+            },
+            "buckets": {
+              "items": {
+                "$ref": "#/components/schemas/UsageBucket"
+              },
+              "type": "array",
+              "title": "Buckets",
+              "description": "The nonempty usage buckets within the returned range."
+            }
+          },
+          "type": "object",
+          "required": [
+            "interval",
+            "start",
+            "end",
+            "buckets"
+          ],
+          "title": "UsageResponse",
+          "examples": [
+            {
+              "buckets": [],
+              "currency": "USD",
+              "end": "2026-11-02T00:00:00Z",
+              "interval": "day",
+              "start": "2026-11-01T00:00:00Z"
+            }
+          ]
+        },
+        "UsageTotal": {
+          "properties": {
+            "operation": {
+              "type": "string",
+              "enum": [
+                "akamai.pixel",
+                "akamai.sensor",
+                "akamai.sbsd",
+                "threatmetrix.profile",
+                "amazon.fwcim"
+              ],
+              "title": "Operation",
+              "description": "The product operation charged for this usage."
+            },
+            "requests": {
+              "type": "integer",
+              "title": "Requests",
+              "description": "The number of charged operations."
+            },
+            "amount": {
+              "type": "string",
+              "pattern": "^-?\\d+\\.\\d{6}$",
+              "title": "Amount",
+              "description": "The total charge in USD."
+            }
+          },
+          "type": "object",
+          "required": [
+            "operation",
+            "requests",
+            "amount"
+          ],
+          "title": "UsageTotal"
+        }
+      },
+      "securitySchemes": {
+        "CustomerKey": {
+          "type": "http",
+          "scheme": "bearer",
+          "bearerFormat": "ng_ API key"
+        }
+      }
+    }
+  }
+}
