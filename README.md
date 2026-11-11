@@ -27,11 +27,12 @@ with Nullgate() as ng, httpx.Client(headers={"User-Agent": UA}) as http:
 
 Amazon: `page.fwcim(form="#signin", timing=performance_timing, inputs={"ap_email": email})` returns `metadata1`.
 ThreatMetrix: `async with page.threatmetrix(send=my_send) as tmx:` then `await tmx.pagehide()`.
+For wrapper scripts, pass `collector={"url": url, "org_id": org, "session_id": visit}` instead of `script_url`; see `examples/kleinanzeigen.py`.
 Errors: catch `NullgateError` and inspect `code`, `message`, `request_id`, and `status`; maintenance retries are automatic.
 Action `value` fields cannot contain strings, regardless of event type; sensor calls reject them with `invalid_actions`.
 
 Use `from nullgate.aio import Nullgate` for async network methods and `await result.wait()`.
-Runnable scripts: `examples/akamai.py`, `examples/amazon.py`, `examples/threatmetrix.py`.
+Runnable scripts: `examples/akamai.py`, `examples/amazon.py`, `examples/threatmetrix.py`, `examples/kleinanzeigen.py`.
 Run development checks with `make check`.
 
 [Documentation and callback recipes](https://docs.nullgate.club)

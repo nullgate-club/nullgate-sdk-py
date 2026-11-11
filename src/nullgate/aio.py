@@ -20,7 +20,7 @@ from .akamai.inputs import _prepare_actions, prepare_inputs
 from .errors import NullgateError, _retry_after
 from .html import Candidate, discover
 from .models import Page as Document
-from .profile import ProfileAsync
+from .profile import ProfileAsync, _collector
 from .target import Target, TargetFetch
 
 __all__ = ["Nullgate", "NullgateError"]
@@ -463,7 +463,11 @@ class Page:
             if kind == "pixel":
                 payload["challenge"] = candidate.challenge
             else:
-                names = {"_abck", "bm_sz"} if kind == "sensor" else {"sbsd"}
+                names = (
+                    {"_abck", "bm_sz"}
+                    if kind == "sensor"
+                    else {"bm_so", "sbsd_o", "bm_s"}
+                )
                 payload["cookies"] = _cookies(cookies or {}, names, self._document.url)
             if kind == "sensor":
                 payload["inputs"] = self._inputs(inputs)
@@ -592,14 +596,20 @@ class Page:
         *,
         send: TargetFetch,
         script_url: str | None = None,
+        collector: Mapping[str, str] | None = None,
         proxy: str | None = None,
     ) -> AbstractAsyncContextManager[ProfileAsync]:
-        return _ProfileContext(self, send, script_url, proxy)
+        return _ProfileContext(self, send, script_url, collector, proxy)
 
 
 class _ProfileContext(AbstractAsyncContextManager[ProfileAsync]):
     def __init__(
-        self, page: Page, send: TargetFetch, script_url: str | None, proxy: str | None
+        self,
+        page: Page,
+        send: TargetFetch,
+        script_url: str | None,
+        collector: Mapping[str, str] | None,
+        proxy: str | None,
     ) -> None:
         self._page, self._send, self._script_url, self._proxy = (
             page,
@@ -607,23 +617,30 @@ class _ProfileContext(AbstractAsyncContextManager[ProfileAsync]):
             script_url,
             proxy,
         )
+        self._collector = collector
         self._active: ProfileAsync | None = None
 
     async def __aenter__(self) -> ProfileAsync:
         page, session = self._page, self._page._session
         if session._client._http.is_closed:
             raise NullgateError("Nullgate is closed", code="closed")
-        candidate = page._candidate("threatmetrix", self._script_url)
-        if candidate is None:
-            raise NullgateError(
-                "No ThreatMetrix tags.js found. Pass script_url",
-                code="protection_not_found",
-            )
+        if self._collector is not None:
+            if self._script_url is not None:
+                raise NullgateError(
+                    "Pass collector or script_url, not both", code="invalid_request"
+                )
+            entry: dict[str, object] = {"collector": _collector(self._collector)}
+        else:
+            candidate = page._candidate("threatmetrix", self._script_url)
+            if candidate is None:
+                raise NullgateError(
+                    "No ThreatMetrix tags.js found. Pass script_url or collector",
+                    code="protection_not_found",
+                )
+            entry = {"tags_url": candidate.url}
         async with session._locks["threatmetrix"]:
             start = session._common(page._document, "threatmetrix")
-            start.update(
-                type="start", at_ms=time.time_ns() // 1_000_000, tags_url=candidate.url
-            )
+            start.update(type="start", at_ms=time.time_ns() // 1_000_000, **entry)
             parsed = urlsplit(session._client._base_url)
             url = urlunsplit(
                 (

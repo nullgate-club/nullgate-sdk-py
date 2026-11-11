@@ -186,18 +186,24 @@ class Page:
         *,
         send: TargetFetch,
         script_url: str | None = None,
+        collector: Mapping[str, str] | None = None,
         proxy: str | None = None,
     ) -> AbstractContextManager[Profile]:
-        return _ProfileContext(self, send, script_url, proxy)
+        return _ProfileContext(self, send, script_url, collector, proxy)
 
 
 class _ProfileContext(AbstractContextManager[Profile]):
     def __init__(
-        self, page: Page, send: TargetFetch, script_url: str | None, proxy: str | None
+        self,
+        page: Page,
+        send: TargetFetch,
+        script_url: str | None,
+        collector: Mapping[str, str] | None,
+        proxy: str | None,
     ) -> None:
         self._client = page._client
         self._context = page._active.threatmetrix(
-            send=send, script_url=script_url, proxy=proxy
+            send=send, script_url=script_url, collector=collector, proxy=proxy
         )
 
     def __enter__(self) -> Profile:

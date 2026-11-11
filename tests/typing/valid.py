@@ -22,6 +22,13 @@ async def async_example(ng: AsyncNullgate, html: str) -> None:
 
     async with page.threatmetrix(send=send) as profile:
         await profile.pagehide()
+    collector = {
+        "url": "https://collector.example/observed.js",
+        "org_id": "org",
+        "session_id": "visit",
+    }
+    async with page.threatmetrix(send=send, collector=collector) as profile:
+        await profile.pagehide()
 
 
 def handle(error: NullgateError) -> tuple[str, str, str | None, int | None]:

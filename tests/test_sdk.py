@@ -60,6 +60,9 @@ def test_wire_body_matches_schema_and_continues_product_session(api, operation):
                     "_abck": "a",
                     "bm_sz": "b",
                     "sbsd": "c",
+                    "bm_so": "so",
+                    "sbsd_o": "o",
+                    "bm_s": "s",
                     "unrelated": "secret",
                 }
             first, second = method(**kwargs), method(**kwargs)
@@ -80,7 +83,7 @@ def test_wire_body_matches_schema_and_continues_product_session(api, operation):
                     cookies={"_abck": "a", "bm_sz": "b"}, inputs=[], actions=[]
                 )
             elif operation == "sbsd":
-                expected_extra["cookies"] = {"sbsd": "c"}
+                expected_extra["cookies"] = {"bm_so": "so", "sbsd_o": "o", "bm_s": "s"}
             else:
                 expected_extra["challenge"] = "123"
             schema = WIRE["akamai"]["components"]["schemas"][
@@ -570,3 +573,48 @@ def test_closed_async_client_refuses_new_network_work(api, product):
 
     asyncio.run(run())
     assert not calls
+
+
+@pytest.mark.parametrize(
+    "operation,selected",
+    [
+        ("sensor", {"_abck", "bm_sz"}),
+        ("sbsd", {"bm_so", "sbsd_o", "bm_s"}),
+        ("fwcim", {"session-id", "session-token", "ubid-main"}),
+    ],
+)
+@pytest.mark.parametrize("jar", [False, True])
+def test_cookie_selection_matches_server_and_v1_contract(api, operation, selected, jar):
+    calls, _ = api
+    observed = {
+        name: f"observed-{name}"
+        for name in (
+            "_abck",
+            "bm_sz",
+            "bm_so",
+            "sbsd_o",
+            "bm_s",
+            "sbsd",
+            "_sbsd",
+            "session-id",
+            "session-token",
+            "ubid-main",
+            "authentication",
+        )
+    }
+    cookies = observed
+    if jar:
+        cookies = httpx.Cookies()
+        for name, value in observed.items():
+            cookies.set(name, value, domain="shop.example", path="/")
+    with Nullgate("test-key") as ng:
+        page = ng.session(user_agent="browser").page(URL, HTML)
+        if operation == "fwcim":
+            page.fwcim(form="#login", timing=TIMING, inputs={}, cookies=cookies)
+        else:
+            getattr(page, operation)(
+                script="source", script_url="/protection", cookies=cookies
+            )
+    assert json.loads(calls[0].content)["cookies"] == {
+        name: observed[name] for name in selected
+    }

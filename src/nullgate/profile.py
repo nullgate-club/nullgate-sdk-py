@@ -5,7 +5,7 @@ import base64
 import binascii
 import json
 import re
-from collections.abc import Callable, Coroutine
+from collections.abc import Callable, Coroutine, Mapping
 from contextlib import suppress
 from threading import Event, Thread, current_thread
 from time import monotonic, time_ns
@@ -42,6 +42,37 @@ def _text(value: object) -> str:
     if not isinstance(value, str) or not value:
         raise ValueError
     return value
+
+
+def _collector(value: Mapping[str, str]) -> dict[str, str]:
+    try:
+        if not isinstance(value, Mapping) or value.keys() != {
+            "url",
+            "org_id",
+            "session_id",
+        }:
+            raise ValueError
+        collector = {key: _text(value[key]) for key in ("url", "org_id", "session_id")}
+        url = collector["url"]
+        parsed = urlsplit(url)
+        if (
+            parsed.scheme not in {"http", "https"}
+            or parsed.hostname is None
+            or parsed.username is not None
+            or parsed.password is not None
+            or "#" in url
+            or "\\" in url
+            or any(char.isspace() for char in url)
+        ):
+            raise ValueError
+        _ = parsed.port
+        return collector
+    except (ValueError, TypeError, KeyError):
+        raise NullgateError(
+            "collector needs an absolute HTTP(S) URL without credentials, fragment, "
+            "backslashes or whitespace, and nonempty org_id and session_id strings",
+            code="invalid_request",
+        ) from None
 
 
 def _http_request(value: object) -> TargetRequest:

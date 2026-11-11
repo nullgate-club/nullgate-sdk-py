@@ -456,3 +456,202 @@ def test_profile_startup_timeout_closes_unready_connection():
             await asyncio.wait_for(closed.wait(), 1)
 
     asyncio.run(run())
+
+
+@pytest.mark.parametrize(
+    "html,options,entry",
+    [
+        (
+            HTML,
+            {},
+            {"tags_url": "https://risk.example/tags.js?org_id=org&session_id=visit"},
+        ),
+        (
+            "<html></html>",
+            {"script_url": "https://risk.example/known-tags.js"},
+            {"tags_url": "https://risk.example/known-tags.js"},
+        ),
+        *[
+            (
+                HTML
+                + '<script src="https://other.example/tags.js?org_id=o&session_id=s"></script>',
+                {"collector": collector},
+                {"collector": collector},
+            )
+            for collector in (
+                {
+                    "url": "https://dfme.kleinanzeigen.de/observed.js?q=1",
+                    "org_id": "181rzcrc",
+                    "session_id": "visit",
+                },
+                {
+                    "url": "http://collector.example:0/collect.js",
+                    "org_id": "org",
+                    "session_id": "visit",
+                },
+                {
+                    "url": "https://collector.example:",
+                    "org_id": " ",
+                    "session_id": "\r\n",
+                },
+                {
+                    "url": "https://[::1]:8443/collect.js",
+                    "org_id": "org",
+                    "session_id": "visit",
+                },
+            )
+        ],
+    ],
+)
+@pytest.mark.parametrize("sync", [False, True])
+def test_profile_entry_selection_sends_exactly_one_tags_url_or_collector(
+    html, options, entry, sync
+):
+    async def run():
+        starts = []
+
+        async def server(socket):
+            starts.append(await receive(socket))
+            await send_json(
+                socket, {"type": "hello", "session": "s", "request_id": "id"}
+            )
+            await send_json(socket, {"type": "ready", "request_id": "id"})
+            assert await receive(socket) == {"type": "close"}
+
+        async with serve(server, "127.0.0.1", 0) as listener:
+            port = listener.sockets[0].getsockname()[1]
+            base_url = f"http://127.0.0.1:{port}"
+            if sync:
+
+                def work():
+                    from nullgate import Nullgate as SyncNullgate
+
+                    with SyncNullgate("test-key", base_url=base_url) as ng:
+                        page = ng.session(user_agent="browser", profile=PROFILE).page(
+                            URL, html
+                        )
+                        with page.threatmetrix(
+                            send=lambda request: TargetResponse(200, {}, b""), **options
+                        ):
+                            pass
+
+                await asyncio.to_thread(work)
+            else:
+                async with Nullgate("test-key", base_url=base_url) as ng:
+                    page = ng.session(user_agent="browser", profile=PROFILE).page(
+                        URL, html
+                    )
+                    async with page.threatmetrix(
+                        send=lambda request: TargetResponse(200, {}, b""), **options
+                    ):
+                        pass
+        assert len(starts) == 1
+        start = starts[0]
+        UUID(start["document_id"])
+        assert start == {
+            "type": "start",
+            "profile": PROFILE,
+            "session": None,
+            "user_agent": "browser",
+            "url": URL,
+            "html": html,
+            "document_id": start["document_id"],
+            "started_at_ms": start["started_at_ms"],
+            "at_ms": start["at_ms"],
+            **entry,
+        }
+        assert start["at_ms"] >= start["started_at_ms"]
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize(
+    "options,code",
+    [
+        ({}, "protection_not_found"),
+        *[
+            ({"collector": collector}, "invalid_request")
+            for collector in (
+                {},
+                [],
+                "",
+                {"url": "https://collector.example"},
+                {"url": "https://collector.example", "org_id": "org"},
+                {"url": "https://collector.example", "session_id": "visit"},
+                {"org_id": "org", "session_id": "visit"},
+                *[
+                    {
+                        **{
+                            "url": "https://collector.example",
+                            "org_id": "org",
+                            "session_id": "visit",
+                        },
+                        key: value,
+                    }
+                    for key, value in (
+                        ("org_id", ""),
+                        ("org_id", None),
+                        ("org_id", 1),
+                        ("session_id", ""),
+                        ("session_id", None),
+                        ("session_id", False),
+                        ("extra", "not allowed"),
+                        ("url", None),
+                        ("url", 123),
+                        *[
+                            ("url", url)
+                            for url in (
+                                "/relative.js",
+                                "ftp://collector.example",
+                                "https://",
+                                "https://user:pass@collector.example",
+                                "https://@collector.example",
+                                "https://collector.example/#",
+                                "https://collector.example/#fragment",
+                                "https://collector.example/with space",
+                                "https://collector.example/with\ttab",
+                                "https://collector.example/with\\backslash",
+                                "https://collector.example:abc",
+                                "https://collector.example:-1",
+                                "https://collector.example:65536",
+                            )
+                        ],
+                    )
+                ],
+            )
+        ],
+        *[
+            (
+                {
+                    "script_url": script,
+                    "collector": {
+                        "url": "https://collector.example",
+                        "org_id": "org",
+                        "session_id": "visit",
+                    },
+                },
+                "invalid_request",
+            )
+            for script in ("", "https://risk.example/tags.js")
+        ],
+    ],
+)
+def test_invalid_profile_collector_is_rejected_before_connecting(
+    monkeypatch, options, code
+):
+    async def unexpected_connect(*args, **kwargs):
+        pytest.fail("Invalid collector reached the WebSocket transport")
+
+    monkeypatch.setattr("nullgate.profile.connect", unexpected_connect)
+
+    async def run():
+        async with Nullgate("test-key") as ng:
+            page = ng.session(user_agent="browser").page(URL, "<html></html>")
+            with pytest.raises(NullgateError) as error:
+                async with page.threatmetrix(
+                    send=lambda request: TargetResponse(200, {}, b""), **options
+                ):
+                    pytest.fail("Invalid collector entered a profile")
+            assert error.value.code == code
+
+    asyncio.run(run())
