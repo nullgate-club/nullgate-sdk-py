@@ -3,11 +3,11 @@
 # Nullgate Python SDK
 
 Typed sync and async clients, local protection discovery, document sessions,
-ready-to-send Akamai solutions and active ThreatMetrix profiles. Your HTTP client
-owns target requests and cookies; private collectors stay on the service.
+ready-to-send Akamai solutions, Amazon FWCIM metadata, and active ThreatMetrix profiles.
+Your HTTP client owns target requests and cookies; private collectors stay on the service.
 
 The defaults are `https://akamai.nullgate.club` for generation,
-`https://threatmetrix.nullgate.club` for profiling, and
+`https://amazon.nullgate.club` for FWCIM, `https://threatmetrix.nullgate.club` for profiling, and
 `https://analytics.nullgate.club` for optional diagnostic reports.
 
 ## Install
@@ -28,6 +28,102 @@ creates a fresh UUID. `ANALYTICS_URL` overrides the reporting endpoint.
 unset/empty explicitly means direct. The API WebSocket never adopts that proxy
 or environment proxy settings.
 Never send your Nullgate API key to the target site.
+
+## Amazon FWCIM
+
+`session.fwcim()` does not require a discovered protection or any JavaScript.
+The public SDK only sends page/form observations; private generation stays on
+the service. The caller owns target HTTP, cookies, password encryption and login.
+
+```python
+from urllib.parse import urlencode
+
+from nullgate import NullgateClient, Page
+from nullgate.amazon import FwcimParams, observe_input
+
+# These are observations supplied by your application, not SDK measurements.
+# Page defaults to its construction time. Override it with the actual observed
+# navigationStart when collecting the document and its timings separately.
+page = Page(
+    url=observed_url,
+    html=observed_html_without_password_values,
+    started_at_ms=observed_performance_timing["navigationStart"],
+)
+with NullgateClient(api_key, amazon_base_url="https://amazon.nullgate.club") as client:
+    with client.open(identity=identity_uuid, user_agent=user_agent) as session:
+        result = session.fwcim(FwcimParams(
+            page=page,
+            performance_timing=observed_performance_timing,
+            form_selector="#signin",
+            inputs=[observe_input(page, email, id="ap_email")],
+            cookies=target_cookies,
+        ))
+        form_fields["metadata1"] = result.metadata1
+        body = urlencode(form_fields)  # URL-encode once, including metadata1.
+        result.wait()                 # send_at is Unix seconds.
+        target_response = target.post(
+            form_action,
+            content=body,
+            headers={
+                **result.headers,
+                "Content-Type": "application/x-www-form-urlencoded",
+            },
+        )
+```
+
+Async clients expose `await session.fwcim(params)` and `await result.wait()`,
+returning `FwcimSolutionAsync`; sync clients return `FwcimSolution`. Results
+contain `metadata1` (hidden from repr), `send_at`, `headers`, and `request_id`,
+not a target request or a login helper. Never log metadata or credentials.
+
+Reuse the same `Page` for a document and create a new one on navigation. Amazon
+continuation state and generation locks are separate from Akamai/ThreatMetrix,
+so an Amazon request or maintenance wait does not block those providers.
+The session identity, timezone and closed status are shared. `performance_timing`
+requires actual nonnegative integer timestamps, with positive
+`navigationStart == page.started_at_ms`. Nonzero event timestamps must not precede
+navigation start; other timestamps may be zero for unknown values. Do not invent measurements.
+An explicit `document_id` can also be supplied to `Page` when restoring caller
+document context. `referrer` and `history_length` are optional observations.
+
+`observe_input` checks the actual input/textarea in the HTML using id/name and,
+when needed, a CSS `selector`. An explicit `form_selector` must select exactly one
+form and all observed inputs must be its descendants, regardless of their `form`
+attribute. External form-associated inputs are not collected by the profiler.
+The helper refuses raw password observations without echoing them. It recognizes
+normalized `type=password`, `current-password`/`new-password` autocomplete tokens,
+and canonical `password`/`ap_password` id/name attributes.
+Populated password controls in HTML are rejected globally before transformation or transport.
+This includes nonempty duplicate `value` attributes that HTML parsers normally ignore.
+Form/input selection excludes inert template content, but the password guard still checks it.
+Caller-prepared password `InputValue` summaries remain supported, but password
+`text` and wrapper `checksum` fields are forbidden. Nonpassword
+values become existing redacted statistics plus a wrapper CESU-8 CRC32 checksum,
+never a checksum inside `value`. Use `include_text=True` only when you explicitly
+want nonpassword canvas text sent. Optional `geometry` needs observed width and
+height and may include left/top; no geometry is invented. Inputs/actions may be
+omitted (distinct from empty lists). No source, script execution or automatic
+Amazon discovery is involved.
+Nonpassword HTML values and explicit canvas text remain allowed. This is not
+general secret detection: remove other secrets from caller-supplied HTML yourself.
+Wrapper `checksum` accepts uint32 or null, and `text` accepts string or null.
+The SDK validates detached JSON containers, not caller-defined dictionary views.
+
+Actions accept only the public event-fact fields and their scalar/nested shapes:
+touch points require finite, non-null `x`/`y` coordinates, which may be negative.
+An optional `identifier` must be an integer. Motion vectors contain
+exactly three nullable finite numbers in an array (or Python tuple).
+`input_summary` is `[length, counts_or_null]`, with
+four nonnegative integer counts, not an `InputValue` dictionary. Raw DOM objects,
+text/value/key payloads and unsupported nested fields are rejected before transport.
+
+Generation transparently retries only a definitive pre-work maintenance
+rejection: HTTP 503 with `X-Nullgate-Maintenance: 1` and finite `Retry-After`
+seconds from 0 through 5. Classification uses headers only, not response bodies
+or error codes. There are at most two retries; rejected continuation headers are
+ignored. Generic/unmarked 503/502, network failures, target requests, and TMX
+WebSocket handshakes are not retried.
+
 
 ## Run one generation
 

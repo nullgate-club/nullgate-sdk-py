@@ -20,6 +20,7 @@ from nullgate import (
     ThreatMetrixParams,
 )
 from nullgate.akamai import Pixel, PixelParams, Sbsd, SbsdParams, Sensor, SensorParams
+from nullgate.amazon import FwcimParams, FwcimSolution, FwcimSolutionAsync
 from nullgate.html import find_protections
 
 
@@ -96,3 +97,21 @@ async def async_profile_consumer(
                 ) as profile:
                     assert_type(profile, ProfileAsync)
                     await profile.pagehide(persisted=True)
+
+
+def sync_amazon_consumer(client: NullgateClient, page: Page) -> None:
+    with client.open(identity=UUID(int=1), user_agent="UA") as session:
+        assert_type(
+            session.fwcim(FwcimParams(page, {"navigationStart": page.started_at_ms})),
+            FwcimSolution,
+        )
+
+
+async def async_amazon_consumer(client: NullgateClientAsync, page: Page) -> None:
+    async with client.open(identity=UUID(int=1), user_agent="UA") as session:
+        assert_type(
+            await session.fwcim(
+                FwcimParams(page, {"navigationStart": page.started_at_ms})
+            ),
+            FwcimSolutionAsync,
+        )

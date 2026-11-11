@@ -2,6 +2,7 @@
 
 from magic_filter import F
 
+from .amazon import FwcimParams, FwcimSolution, FwcimSolutionAsync
 from .client import (
     NullgateAPIError,
     NullgateClient,
@@ -30,6 +31,9 @@ __all__ = [
     "ErrorInfo",
     "ErrorTarget",
     "F",
+    "FwcimParams",
+    "FwcimSolution",
+    "FwcimSolutionAsync",
     "NullgateAPIError",
     "NullgateClient",
     "NullgateClientAsync",

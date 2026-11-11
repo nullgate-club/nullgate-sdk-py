@@ -3,6 +3,7 @@
 import asyncio
 import json
 import math
+import time
 from threading import Lock
 from types import TracebackType
 from typing import Literal, TypedDict, cast, overload
@@ -13,6 +14,8 @@ from magic_filter import MagicFilter
 
 from .akamai import Params, PixelParams, SbsdParams, SensorParams
 from .akamai.inputs import _prepare_actions, prepare_inputs
+from .amazon import FwcimParams, FwcimSolution, FwcimSolutionAsync
+from .amazon import _payload as _fwcim_payload
 from .errors import ErrorInfo, _parse_error_info
 from .html import Protection, find_protections
 from .models import Page
@@ -28,6 +31,7 @@ from .target import Target
 from .threatmetrix import ThreatMetrixParams
 
 _BASE_URL = "https://akamai.nullgate.club"
+_AMAZON_BASE_URL = "https://amazon.nullgate.club"
 _ANALYTICS_URL = "https://analytics.nullgate.club"
 _REPORT_TIMEOUT = httpx.Timeout(3.0)
 
@@ -42,6 +46,8 @@ class NullgateAPIError(httpx.HTTPStatusError):
         self.error_info: ErrorInfo | None = None
         try:
             body = response.json()
+        except httpx.ResponseNotRead:
+            self.detail = "Response body unavailable"
         except ValueError:
             self.detail = response.text
         else:
@@ -182,6 +188,86 @@ def _solution_data(response: httpx.Response, params: Params) -> _SolutionData:
     }
 
 
+class _FwcimData(TypedDict):
+    metadata1: str
+    send_at: float
+    headers: dict[str, str]
+    request_id: str
+
+
+def _fwcim_data(response: httpx.Response) -> _FwcimData:
+    if not response.is_success:
+        raise NullgateAPIError(response)
+    data = response.json()
+    if not isinstance(data, dict):
+        raise ValueError("Nullgate response must be a JSON object")
+    metadata = data.get("metadata1")
+    headers = data.get("headers")
+    send_at = data.get("send_at")
+    if not isinstance(metadata, str):
+        raise ValueError("Nullgate response metadata1 must be a string")
+    if not isinstance(headers, dict) or not all(
+        isinstance(name, str) and isinstance(value, str)
+        for name, value in headers.items()
+    ):
+        raise ValueError("Nullgate response headers must contain string values")
+    if (
+        isinstance(send_at, bool)
+        or not isinstance(send_at, (int, float))
+        or not math.isfinite(send_at)
+    ):
+        raise ValueError("Nullgate response send_at must be a finite Unix timestamp")
+    request_id = response.headers.get("X-Request-ID")
+    if not request_id:
+        raise ValueError("Nullgate response is missing X-Request-ID")
+    return {
+        "metadata1": metadata,
+        "headers": dict(headers),
+        "send_at": send_at,
+        "request_id": request_id,
+    }
+
+
+def _fwcim_request(
+    base_url: str,
+    api_key: str,
+    identity: UUID,
+    user_agent: str,
+    timezone: str | None,
+    state_id: str | None,
+    params: FwcimParams,
+) -> httpx.Request:
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "User-Agent": user_agent,
+        "X-Nullgate-Error-Format": "1",
+    }
+    if state_id is not None:
+        headers["X-State-ID"] = state_id
+    return httpx.Request(
+        "POST",
+        f"{base_url}/v1/{identity}/generate",
+        params={"type": "fwcim"},
+        headers=headers,
+        json=_fwcim_payload(params, timezone),
+    )
+
+
+def _maintenance_delay(response: httpx.Response) -> float | None:
+    if (
+        response.status_code != 503
+        or response.headers.get("X-Nullgate-Maintenance") != "1"
+    ):
+        return None
+    try:
+        delay = float(response.headers["Retry-After"])
+    except (KeyError, ValueError):
+        return None
+    if not math.isfinite(delay) or not 0 <= delay <= 5:
+        return None
+    return delay
+
+
 def _generate_request(
     base_url: str,
     api_key: str,
@@ -228,6 +314,7 @@ class NullgateClient:
         base_url: str = _BASE_URL,
         analytics_url: str = _ANALYTICS_URL,
         profile_base_url: str = _PROFILE_BASE_URL,
+        amazon_base_url: str = _AMAZON_BASE_URL,
         timeout: httpx.Timeout | float = 30.0,
         transport: httpx.BaseTransport | None = None,
     ) -> None:
@@ -235,6 +322,7 @@ class NullgateClient:
         self._base_url = base_url.rstrip("/")
         self._analytics_url = analytics_url.rstrip("/")
         self._profile_base_url = profile_base_url
+        self._amazon_base_url = amazon_base_url.rstrip("/")
         self._closed = False
         self._profiles_lock = Lock()
         self._profiles: set[Profile] = set()
@@ -319,6 +407,7 @@ class NullgateClientAsync:
         base_url: str = _BASE_URL,
         analytics_url: str = _ANALYTICS_URL,
         profile_base_url: str = _PROFILE_BASE_URL,
+        amazon_base_url: str = _AMAZON_BASE_URL,
         timeout: httpx.Timeout | float = 30.0,
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
@@ -326,6 +415,7 @@ class NullgateClientAsync:
         self._base_url = base_url.rstrip("/")
         self._analytics_url = analytics_url.rstrip("/")
         self._profile_base_url = profile_base_url
+        self._amazon_base_url = amazon_base_url.rstrip("/")
         self._closed = False
         self._profiles: set[ProfileAsync] = set()
         self._close_task: asyncio.Task[None] | None = None
@@ -415,14 +505,32 @@ class NullgateSession:
         self.timezone = timezone
         self._client = client
         self._state_id: str | None = uuid4().hex
+        self._amazon_state_id: str | None = uuid4().hex
         self._closed = False
         self._lock = Lock()
+        self._amazon_lock = Lock()
         self._profiles_lock = Lock()
         self._profiles: set[Profile] = set()
 
     @property
     def is_closed(self) -> bool:
         return self._closed or self._client.is_closed
+
+    def _send_generation(self, request: httpx.Request) -> httpx.Response:
+        for attempt in range(3):
+            if self.is_closed:
+                raise RuntimeError("NullgateSession is closed")
+            response = self._client._http.send(
+                request, auth=None, follow_redirects=False, stream=True
+            )
+            delay = _maintenance_delay(response)
+            if delay is None:
+                return response
+            response.close()
+            if attempt == 2:
+                raise NullgateAPIError(response)
+            time.sleep(delay)
+        raise AssertionError("Unreachable generation retry")
 
     @overload
     def solve(self, params: PixelParams) -> Solution: ...
@@ -446,12 +554,7 @@ class NullgateSession:
                 self._state_id,
                 params,
             )
-            response = self._client._http.send(
-                request,
-                auth=None,
-                follow_redirects=False,
-                stream=True,
-            )
+            response = self._send_generation(request)
             try:
                 state_id = response.headers.get("X-State-ID")
                 if state_id is not None:
@@ -460,6 +563,36 @@ class NullgateSession:
                 return Solution(
                     **_solution_data(response, params), _reporter=self._client.report
                 )
+            finally:
+                response.close()
+
+    def fwcim(self, params: FwcimParams) -> FwcimSolution:
+        """Generate metadata for the caller's form, never submit that form."""
+        with self._amazon_lock:
+            if self.is_closed:
+                raise RuntimeError("NullgateSession is closed")
+            response = self._send_generation(
+                _fwcim_request(
+                    self._client._amazon_base_url,
+                    self._client._api_key,
+                    self.identity,
+                    self.user_agent,
+                    self.timezone,
+                    self._amazon_state_id,
+                    params,
+                )
+            )
+            try:
+                with self._profiles_lock:
+                    if self.is_closed:
+                        raise RuntimeError("NullgateSession is closed")
+                    state_id = response.headers.get("X-State-ID")
+                    if state_id is not None:
+                        self._amazon_state_id = state_id
+                response.read()
+                if self.is_closed:
+                    raise RuntimeError("NullgateSession is closed")
+                return FwcimSolution(**_fwcim_data(response))
             finally:
                 response.close()
 
@@ -520,6 +653,7 @@ class NullgateSession:
         with self._profiles_lock:
             self._closed = True
             self._state_id = None
+            self._amazon_state_id = None
             profiles = tuple(self._profiles)
         failure: BaseException | None = None
         for profile in profiles:
@@ -559,14 +693,32 @@ class NullgateSessionAsync:
         self.timezone = timezone
         self._client = client
         self._state_id: str | None = uuid4().hex
+        self._amazon_state_id: str | None = uuid4().hex
         self._closed = False
         self._lock = asyncio.Lock()
+        self._amazon_lock = asyncio.Lock()
         self._profiles: set[ProfileAsync] = set()
         self._close_task: asyncio.Task[None] | None = None
 
     @property
     def is_closed(self) -> bool:
         return self._closed or self._client.is_closed
+
+    async def _send_generation(self, request: httpx.Request) -> httpx.Response:
+        for attempt in range(3):
+            if self.is_closed:
+                raise RuntimeError("NullgateSessionAsync is closed")
+            response = await self._client._http.send(
+                request, auth=None, follow_redirects=False, stream=True
+            )
+            delay = _maintenance_delay(response)
+            if delay is None:
+                return response
+            await response.aclose()
+            if attempt == 2:
+                raise NullgateAPIError(response)
+            await asyncio.sleep(delay)
+        raise AssertionError("Unreachable generation retry")
 
     @overload
     async def solve(self, params: PixelParams) -> SolutionAsync: ...
@@ -590,12 +742,7 @@ class NullgateSessionAsync:
                 self._state_id,
                 params,
             )
-            response = await self._client._http.send(
-                request,
-                auth=None,
-                follow_redirects=False,
-                stream=True,
-            )
+            response = await self._send_generation(request)
             try:
                 state_id = response.headers.get("X-State-ID")
                 if state_id is not None:
@@ -604,6 +751,35 @@ class NullgateSessionAsync:
                 return SolutionAsync(
                     **_solution_data(response, params), _reporter=self._client.report
                 )
+            finally:
+                await response.aclose()
+
+    async def fwcim(self, params: FwcimParams) -> FwcimSolutionAsync:
+        """Generate metadata for the caller's form, never submit that form."""
+        async with self._amazon_lock:
+            if self.is_closed:
+                raise RuntimeError("NullgateSessionAsync is closed")
+            response = await self._send_generation(
+                _fwcim_request(
+                    self._client._amazon_base_url,
+                    self._client._api_key,
+                    self.identity,
+                    self.user_agent,
+                    self.timezone,
+                    self._amazon_state_id,
+                    params,
+                )
+            )
+            try:
+                if self.is_closed:
+                    raise RuntimeError("NullgateSessionAsync is closed")
+                state_id = response.headers.get("X-State-ID")
+                if state_id is not None:
+                    self._amazon_state_id = state_id
+                await response.aread()
+                if self.is_closed:
+                    raise RuntimeError("NullgateSessionAsync is closed")
+                return FwcimSolutionAsync(**_fwcim_data(response))
             finally:
                 await response.aclose()
 
@@ -644,6 +820,7 @@ class NullgateSessionAsync:
     async def _finish_close(self) -> None:
         self._closed = True
         self._state_id = None
+        self._amazon_state_id = None
         results = await asyncio.gather(
             *(profile.aclose() for profile in tuple(self._profiles)),
             return_exceptions=True,
