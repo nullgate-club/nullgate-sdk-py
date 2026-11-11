@@ -477,12 +477,13 @@ class Page:
             try:
                 _validate_generated(data, target_request=True)
                 request = data["request"]
+                # Same names and order as the TypeScript SDK.
                 headers = {
-                    "Referer": self._document.url,
-                    "Origin": urlunsplit(
+                    **request["headers"],
+                    "origin": urlunsplit(
                         (*urlsplit(self._document.url)[:2], "", "", "")
                     ),
-                    **request["headers"],
+                    "referer": self._document.url,
                 }
                 result = Request(
                     _url(request["url"]),

@@ -65,11 +65,11 @@ def test_wire_body_matches_schema_and_continues_product_session(api, operation):
             first, second = method(**kwargs), method(**kwargs)
             assert first.body == second.body == "generated"
             assert first.url == "https://shop.example/verify"
-            assert first.headers == {
-                "Referer": URL,
-                "Origin": "https://shop.example",
-                "content-type": "text/plain;charset=UTF-8",
-            }
+            assert list(first.headers.items()) == [
+                ("content-type", "text/plain;charset=UTF-8"),
+                ("origin", "https://shop.example"),
+                ("referer", URL),
+            ]
             assert "generated" not in repr(first)
             expected_extra = {
                 "script": "observed script",
