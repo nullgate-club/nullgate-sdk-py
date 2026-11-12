@@ -174,7 +174,6 @@ class Nullgate:
         self._base_url = base_url.rstrip("/")
         self._key = key
         self._timeout = timeout
-        self._request_gzip = False
         self._request_gzip_disabled = False
         self._http = httpx.AsyncClient(
             timeout=timeout,
@@ -217,8 +216,7 @@ class Nullgate:
             if self._http.is_closed:
                 raise NullgateError("Nullgate is closed", code="closed")
             compressed = (
-                self._request_gzip
-                and not self._request_gzip_disabled
+                not self._request_gzip_disabled
                 and not gzip_retried
                 and method != "GET"
                 and len(body) >= 1024
@@ -243,13 +241,6 @@ class Nullgate:
                 raise NullgateError(
                     "Nullgate API transport failed", code="transport_error"
                 ) from None
-            for coding in response.headers.get("Accept-Encoding", "").split(","):
-                name, *parameters = coding.lower().strip().split(";")
-                if name.strip() == "gzip" and not any(
-                    re.fullmatch(r"q\s*=\s*0(?:\.0*)?", part.strip())
-                    for part in parameters
-                ):
-                    self._request_gzip = True
             if compressed and response.status_code in (413, 415):
                 if response.status_code == 415:
                     self._request_gzip_disabled = True

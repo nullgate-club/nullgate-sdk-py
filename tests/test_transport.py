@@ -237,43 +237,29 @@ def compression_page(client):
     )
 
 
-def advertise_gzip(call, client, replies):
-    replies.append(httpx.Response(200, json={}, headers={"Accept-Encoding": "gzip"}))
-    call(client.account)
-
-
-def test_gzip_requires_advertisement_and_preserves_exact_json(compression_client):
-    client, call, calls, replies = compression_client
+def test_first_request_uses_gzip_and_preserves_exact_json(compression_client):
+    client, call, calls, _ = compression_client
     script = "const π = '😀';" * 100
-    replies.append(
-        httpx.Response(
-            400,
-            json={"code": "invalid_request", "message": "Try again"},
-            headers={"Accept-Encoding": "br, GZip; q=1"},
-        )
-    )
-    with pytest.raises(NullgateError):
-        call(compression_page(client).sensor, script=script, cookies={})
     call(compression_page(client).sensor, script=script, cookies={})
-    first, second = calls
-    assert "Content-Encoding" not in first.headers
-    assert second.headers["Content-Encoding"] == "gzip"
-    assert gzip.decompress(second.content) == first.content
-    assert int(second.headers["Content-Length"]) == len(second.content)
-    assert second.headers["Content-Type"] == "application/json"
-
-
-@pytest.mark.parametrize("advertisement", [None, "br", "gzip;q=0", "GZip; q=0.00"])
-def test_old_servers_and_disabled_gzip_advertisements_keep_raw_json(
-    compression_client, advertisement
-):
-    client, call, calls, replies = compression_client
-    headers = {} if advertisement is None else {"Accept-Encoding": advertisement}
-    replies.append(httpx.Response(200, json={}, headers=headers))
-    call(client.account)
-    call(compression_page(client).sensor, script="x" * 2048, cookies={})
-    assert "Content-Encoding" not in calls[-1].headers
-    assert json.loads(calls[-1].content)["script"] == "x" * 2048
+    request = calls[0]
+    expected = {
+        "profile": "00000000-0000-0000-0000-000000000001",
+        "session": None,
+        "user_agent": "browser",
+        "url": "https://shop.example",
+        "html": '<script src="/sensor"></script>',
+        "document_id": "00000000-0000-0000-0000-000000000002",
+        "started_at_ms": 1800000000000,
+        "script_url": "https://shop.example/sensor",
+        "script": script,
+        "cookies": {},
+    }
+    assert request.headers["Content-Encoding"] == "gzip"
+    assert gzip.decompress(request.content) == json.dumps(
+        expected, ensure_ascii=False, separators=(",", ":")
+    ).encode("utf-8")
+    assert int(request.headers["Content-Length"]) == len(request.content)
+    assert request.headers["Content-Type"] == "application/json"
 
 
 @pytest.mark.parametrize("size", [1023, 1024, 1025])
@@ -281,7 +267,6 @@ def test_gzip_threshold_counts_serialized_utf8_bytes(compression_client, size):
     client, call, calls, replies = compression_client
     call(compression_page(client).sensor, script="", cookies={})
     overhead = len(calls[-1].content)
-    advertise_gzip(call, client, replies)
     call(compression_page(client).sensor, script="a" * (size - overhead), cookies={})
     request = calls[-1]
     if size >= 1024:
@@ -300,14 +285,12 @@ def test_gzip_retries_raw_and_only_415_disables_future_compression(
     compression_client, status
 ):
     client, call, calls, replies = compression_client
-    advertise_gzip(call, client, replies)
     replies.append(httpx.Response(status, text="proxy error"))
     call(compression_page(client).sensor, script="x" * 2048, cookies={})
     compressed, raw = calls[-2:]
     assert compressed.headers["Content-Encoding"] == "gzip"
     assert "Content-Encoding" not in raw.headers
     assert gzip.decompress(compressed.content) == raw.content
-    advertise_gzip(call, client, replies)
     call(compression_page(client).sensor, script="x" * 2048, cookies={})
     assert (calls[-1].headers.get("Content-Encoding") == "gzip") is (status == 413)
 
@@ -348,7 +331,6 @@ def test_gzip_and_script_fallbacks_share_three_attempt_budget(
                 "request_id": "first",
                 "script_retained": True,
             },
-            headers={"Accept-Encoding": "gzip"},
         )
     )
     call(page.sensor, script="source" * 200, cookies={})
