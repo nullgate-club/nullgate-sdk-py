@@ -9,6 +9,7 @@ from collections.abc import Awaitable, Callable, Mapping, Sequence
 from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass, field
 from datetime import datetime
+from hashlib import sha256
 from types import TracebackType
 from typing import Any, Self, cast
 from urllib.parse import urljoin, urlsplit, urlunsplit
@@ -330,6 +331,7 @@ class Session:
         self._user_agent = user_agent
         self._timezone = timezone
         self._sessions: dict[str, str] = {}
+        self._sensor_retained: tuple[object, str, str] | None = None
         self._locks = {
             product: asyncio.Lock() for product in ("akamai", "amazon", "threatmetrix")
         }
@@ -380,6 +382,7 @@ class Page:
         self._session = session
         self._document = document
         self._explicit_start = explicit_start
+        self._sensor_document = object()
         self._candidates, self._pixel_challenges, self._pixel_urls = discover(document)
 
     def _candidate(
@@ -590,9 +593,26 @@ class Page:
                 payload["cookies"] = _cookies(cookies or {}, names, self._document.url)
             if kind == "sensor":
                 payload.update(self._observations(inputs, actions))
-            data = await session._client._request(
-                "POST", f"/akamai/{kind}", payload=payload
-            )
+                digest = sha256(script.encode("utf-8")).hexdigest()
+                retained = (self._sensor_document, payload["session"], digest)
+                if session._sensor_retained == retained:
+                    del payload["script"]
+                    payload["script_digest"] = digest
+                else:
+                    session._sensor_retained = None
+            try:
+                data = await session._client._request(
+                    "POST", f"/akamai/{kind}", payload=payload
+                )
+            except NullgateError as exc:
+                if kind != "sensor" or exc.code != "script_required":
+                    raise
+                session._sensor_retained = None
+                payload.pop("script_digest", None)
+                payload["script"] = script
+                data = await session._client._request(
+                    "POST", "/akamai/sensor", payload=payload
+                )
             try:
                 _validate_generated(data, target_request=True)
                 request = data["request"]
@@ -613,6 +633,18 @@ class Page:
                     _reporter=session._client.report,
                 )
                 session._sessions["akamai"] = data["session"]
+                if kind == "sensor":
+                    session._sensor_retained = (
+                        (self._sensor_document, data["session"], digest)
+                        if data.get("script_retained") is True
+                        else None
+                    )
+                elif session._sensor_retained is not None and (
+                    kind == "pixel"
+                    or session._sensor_retained[:2]
+                    != (self._sensor_document, data["session"])
+                ):
+                    session._sensor_retained = None
                 return result
             except (KeyError, TypeError, ValueError):
                 raise NullgateError(

@@ -598,3 +598,176 @@ def test_cookie_selection_matches_server_and_v1_contract(api, operation, selecte
     assert json.loads(calls[0].content)["cookies"] == {
         name: observed[name] for name in selected
     }
+
+
+@pytest.fixture(params=["sync", "async"])
+def sensor_client(request, api):
+    with asyncio.Runner() as runner:
+        client = (
+            Nullgate("test-key")
+            if request.param == "sync"
+            else AsyncNullgate("test-key")
+        )
+
+        def call(method, **kwargs):
+            result = method(**kwargs)
+            return runner.run(result) if request.param == "async" else result
+
+        try:
+            yield client, call
+        finally:
+            if request.param == "async":
+                runner.run(client.aclose())
+            else:
+                client.close()
+
+
+def sensor_response(*, session="akamai-session", **extra):
+    return (
+        200,
+        {
+            "request": {
+                "url": "https://shop.example/verify",
+                "body": "generated",
+                "headers": {},
+                "send_at": 0,
+            },
+            "session": session,
+            "request_id": "request-id",
+            **extra,
+        },
+        {},
+    )
+
+
+@pytest.mark.parametrize("flag", [True, False, None, 1, "true"])
+def test_sensor_sends_digest_only_after_boolean_retention(api, sensor_client, flag):
+    calls, replies = api
+    client, call = sensor_client
+    replies.append(
+        sensor_response(**({} if flag is None else {"script_retained": flag}))
+    )
+    page = client.session(user_agent="browser", profile=PROFILE).page(
+        URL, HTML, document_id=PROFILE, started_at_ms=1800000000000
+    )
+    call(page.sensor, script="abc", cookies={"_abck": "cookie"}, actions=[])
+    call(page.sensor, script="abc", cookies={"_abck": "cookie"}, actions=[])
+    common = {
+        "profile": PROFILE,
+        "session": None,
+        "user_agent": "browser",
+        "url": URL,
+        "html": HTML,
+        "document_id": PROFILE,
+        "started_at_ms": 1800000000000,
+        "script_url": "https://shop.example/sensor",
+        "cookies": {"_abck": "cookie"},
+        "actions": [],
+    }
+    assert json.loads(calls[0].content) == {**common, "script": "abc"}
+    continuation = (
+        {
+            "script_digest": (
+                "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+            )
+        }
+        if flag is True
+        else {"script": "abc"}
+    )
+    assert json.loads(calls[1].content) == {
+        **common,
+        "session": "akamai-session",
+        **continuation,
+    }
+    # A response without the flag withdraws the acknowledgement.
+    call(page.sensor, script="abc", cookies={})
+    assert json.loads(calls[2].content)["script"] == "abc"
+
+
+@pytest.mark.parametrize("retry_fails", [False, True])
+@pytest.mark.parametrize("retained", [False, True])
+def test_sensor_script_required_retries_once_without_changing_observations(
+    api, sensor_client, retry_fails, retained
+):
+    calls, replies = api
+    client, call = sensor_client
+    page = client.session(user_agent="browser").page(URL, HTML)
+    replies.append(sensor_response(script_retained=retained))
+    call(page.sensor, script="abc", cookies={})
+    required = (
+        428,
+        {
+            "code": "script_required",
+            "message": "Send the script for this document.",
+            "request_id": "missing-script",
+        },
+        {},
+    )
+    replies.extend(
+        [required, required if retry_fails else sensor_response(script_retained=True)]
+    )
+    kwargs = {"script": "abc", "cookies": {"_abck": "a"}, "inputs": [], "actions": []}
+    if retry_fails:
+        with pytest.raises(NullgateError) as error:
+            call(page.sensor, **kwargs)
+        assert (error.value.code, error.value.status) == ("script_required", 428)
+    else:
+        assert call(page.sensor, **kwargs).body == "generated"
+    assert len(calls) == 3
+    digest_body, full_body = [json.loads(request.content) for request in calls[1:]]
+    digest_body.pop("script_digest", None)
+    assert full_body == {**digest_body, "script": "abc"}
+    call(page.sensor, script="abc", cookies={})
+    assert ("script" in json.loads(calls[-1].content)) is retry_fails
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        "script",
+        "page",
+        "explicit_document",
+        "same_document_new_page",
+        "session",
+        "other_page_then_return",
+        "sbsd_other_page",
+        "sbsd_session",
+        "pixel",
+    ],
+)
+def test_sensor_retention_resets_for_changed_continuation(api, sensor_client, change):
+    calls, replies = api
+    client, call = sensor_client
+    session = client.session(user_agent="browser")
+    page = session.page(URL, HTML, document_id=PROFILE)
+    replies.append(sensor_response(script_retained=True))
+    call(page.sensor, script="abc", cookies={})
+    script = "abc"
+    if change == "script":
+        script = "def"
+    elif change in {"page", "explicit_document", "same_document_new_page"}:
+        kwargs = {}
+        if change != "page":
+            kwargs["document_id"] = (
+                PROFILE
+                if change == "same_document_new_page"
+                else "00000000-0000-0000-0000-000000000001"
+            )
+        page = session.page(URL, HTML, **kwargs)
+    elif change == "session":
+        page = client.session(user_agent="browser").page(URL, HTML, document_id=PROFILE)
+    elif change == "other_page_then_return":
+        replies.append(sensor_response(script_retained=True))
+        call(session.page(URL, HTML).sensor, script="abc", cookies={})
+    elif change in {"sbsd_other_page", "sbsd_session"}:
+        other = session.page(URL, HTML) if change == "sbsd_other_page" else page
+        replies.append(
+            sensor_response(session="rotated" if other is page else "akamai-session")
+        )
+        call(other.sbsd, script="sbsd", script_url="/guard", cookies={})
+    else:
+        call(page.pixel, script="pixel", script_url="/akam/13/a", challenge="123")
+    call(page.sensor, script=script, cookies={})
+    body = json.loads(calls[-1].content)
+    assert body["script"] == script
+    assert "script_digest" not in body

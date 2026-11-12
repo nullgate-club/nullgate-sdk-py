@@ -34,6 +34,7 @@ Pass `transport=` to inject an HTTPX API transport (sync or async); it never han
 Use `from nullgate import prepare_inputs, PreparedInput`; pass prepared `inputs` to sensor or FWCIM, including password summaries without raw values.
 Use `from nullgate.akamai import is_enough, abck_counters` to stop ordinary sensor sends; this does not prove target acceptance.
 Omitted `inputs`/`actions` preserve collection defaults; `[]` sends an explicitly empty collection. Call `result.report()` after a target failure; `True` means HTTP delivery only.
+Keep passing `script` to `page.sensor`; the SDK uploads it only until the server retains it, and retries once if needed.
 
 Use `from nullgate.aio import Nullgate` for async network methods and `await result.wait()`.
 Runnable scripts: `examples/akamai.py`, `examples/amazon.py`, `examples/threatmetrix.py`, `examples/kleinanzeigen.py`.
