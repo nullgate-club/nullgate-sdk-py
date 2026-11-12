@@ -1,6 +1,8 @@
 """Async API. Local session and page creation never perform network calls."""
 
 import asyncio
+import gzip
+import json
 import math
 import os
 import re
@@ -172,6 +174,8 @@ class Nullgate:
         self._base_url = base_url.rstrip("/")
         self._key = key
         self._timeout = timeout
+        self._request_gzip = False
+        self._request_gzip_disabled = False
         self._http = httpx.AsyncClient(
             timeout=timeout,
             transport=transport,
@@ -196,17 +200,42 @@ class Nullgate:
         *,
         payload: dict[str, object] | None = None,
         params: dict[str, str] | None = None,
+        sensor_script: str | None = None,
     ) -> dict[str, Any]:
         deadline = time.monotonic() + self._timeout
+        body = (
+            json.dumps(
+                payload, ensure_ascii=False, separators=(",", ":"), allow_nan=False
+            ).encode("utf-8")
+            if payload is not None
+            else b""
+        )
+        compressed_body: bytes | None = None
+        gzip_retried = False
+        script_retried = False
         for attempt in range(3):
             if self._http.is_closed:
                 raise NullgateError("Nullgate is closed", code="closed")
+            compressed = (
+                self._request_gzip
+                and not self._request_gzip_disabled
+                and not gzip_retried
+                and method != "GET"
+                and len(body) >= 1024
+            )
+            headers = {"Authorization": f"Bearer {self._key}"}
+            if payload is not None:
+                headers["Content-Type"] = "application/json"
+            if compressed:
+                if compressed_body is None:
+                    compressed_body = gzip.compress(body, compresslevel=1, mtime=0)
+                headers["Content-Encoding"] = "gzip"
             try:
                 response = await self._http.request(
                     method,
                     self._base_url + path,
-                    headers={"Authorization": f"Bearer {self._key}"},
-                    json=payload,
+                    headers=headers,
+                    content=compressed_body if compressed else body,
                     params=params,
                     timeout=max(0.001, deadline - time.monotonic()),
                 )
@@ -214,6 +243,19 @@ class Nullgate:
                 raise NullgateError(
                     "Nullgate API transport failed", code="transport_error"
                 ) from None
+            for coding in response.headers.get("Accept-Encoding", "").split(","):
+                name, *parameters = coding.lower().strip().split(";")
+                if name.strip() == "gzip" and not any(
+                    re.fullmatch(r"q\s*=\s*0(?:\.0*)?", part.strip())
+                    for part in parameters
+                ):
+                    self._request_gzip = True
+            if compressed and response.status_code in (413, 415):
+                if response.status_code == 415:
+                    self._request_gzip_disabled = True
+                if not gzip_retried and attempt < 2:
+                    gzip_retried = True
+                    continue
             try:
                 data = response.json()
                 if not isinstance(data, dict):
@@ -234,6 +276,21 @@ class Nullgate:
                 request_id=data.get("request_id"),
                 status=response.status_code,
             )
+            if (
+                error.code == "script_required"
+                and sensor_script is not None
+                and not script_retried
+                and attempt < 2
+            ):
+                script_retried = True
+                payload = dict(payload or {})
+                payload.pop("script_digest", None)
+                payload["script"] = sensor_script
+                body = json.dumps(
+                    payload, ensure_ascii=False, separators=(",", ":"), allow_nan=False
+                ).encode("utf-8")
+                compressed_body = None
+                continue
             delay = _retry_after(response.headers.get("Retry-After"))
             if (
                 error.code != "maintenance"
@@ -602,17 +659,15 @@ class Page:
                     session._sensor_retained = None
             try:
                 data = await session._client._request(
-                    "POST", f"/akamai/{kind}", payload=payload
+                    "POST",
+                    f"/akamai/{kind}",
+                    payload=payload,
+                    sensor_script=script if kind == "sensor" else None,
                 )
-            except NullgateError as exc:
-                if kind != "sensor" or exc.code != "script_required":
-                    raise
-                session._sensor_retained = None
-                payload.pop("script_digest", None)
-                payload["script"] = script
-                data = await session._client._request(
-                    "POST", "/akamai/sensor", payload=payload
-                )
+            except NullgateError:
+                if kind == "sensor":
+                    session._sensor_retained = None
+                raise
             try:
                 _validate_generated(data, target_request=True)
                 request = data["request"]

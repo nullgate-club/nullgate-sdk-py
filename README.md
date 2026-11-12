@@ -35,6 +35,7 @@ Use `from nullgate import prepare_inputs, PreparedInput`; pass prepared `inputs`
 Use `from nullgate.akamai import is_enough, abck_counters` to stop ordinary sensor sends; this does not prove target acceptance.
 Omitted `inputs`/`actions` preserve collection defaults; `[]` sends an explicitly empty collection. Call `result.report()` after a target failure; `True` means HTTP delivery only.
 Keep passing `script` to `page.sensor`; the SDK uploads it only until the server retains it, and retries once if needed.
+The SDK uses gzip for bodies of at least 1024 bytes after the server advertises support; transports see compressed bytes.
 
 Use `from nullgate.aio import Nullgate` for async network methods and `await result.wait()`.
 Runnable scripts: `examples/akamai.py`, `examples/amazon.py`, `examples/threatmetrix.py`, `examples/kleinanzeigen.py`.
