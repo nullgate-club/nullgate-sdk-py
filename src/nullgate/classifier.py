@@ -27,9 +27,21 @@ class Classified:
     results: list[Classification]
 
 
-def _request(
-    images: Image | Sequence[Image], labels: Sequence[str]
-) -> tuple[list[bytes], list[str]]:
+@dataclass(frozen=True, slots=True)
+class Match:
+    """Independent scores in request query order."""
+
+    scores: list[float]
+
+
+@dataclass(frozen=True, slots=True)
+class Matched:
+    """One result per image, in request image order."""
+
+    results: list[Match]
+
+
+def _images(images: Image | Sequence[Image]) -> list[bytes]:
     batch = [images] if isinstance(images, Image) else images
     if isinstance(batch, str) or not isinstance(batch, Sequence):
         raise NullgateError(
@@ -41,11 +53,18 @@ def _request(
         )
     if not all(isinstance(image, Image) and len(image) for image in batch):
         raise NullgateError("Each image must be nonempty bytes", code="invalid_request")
+    return [bytes(image) for image in batch]
+
+
+def _request(
+    images: Image | Sequence[Image], labels: Sequence[str]
+) -> tuple[list[bytes], list[str]]:
+    batch = _images(images)
     if isinstance(labels, str) or len(labels) < 2:
         raise NullgateError(
             "labels must contain at least 2 items", code="invalid_request"
         )
-    return [bytes(image) for image in batch], list(labels)
+    return batch, list(labels)
 
 
 def _classified(data: dict[str, Any], *, images: int, labels: list[str]) -> Classified:
@@ -70,3 +89,25 @@ def _classified(data: dict[str, Any], *, images: int, labels: list[str]) -> Clas
             "Invalid classification response", code="invalid_response"
         ) from None
     return Classified(model, parsed)
+
+
+def _matched(data: dict[str, Any], *, images: int, queries: int) -> Matched:
+    try:
+        results = data["results"]
+        if not isinstance(results, list) or len(results) != images:
+            raise ValueError
+        parsed = []
+        for result in results:
+            scores = result["scores"]
+            if not isinstance(scores, list) or len(scores) != queries:
+                raise ValueError
+            if not all(
+                type(score) in (int, float) and 0 <= score <= 1 for score in scores
+            ):
+                raise ValueError
+            parsed.append(Match([float(score) for score in scores]))
+    except (KeyError, TypeError, ValueError):
+        raise NullgateError(
+            "Invalid matching response", code="invalid_response"
+        ) from None
+    return Matched(parsed)

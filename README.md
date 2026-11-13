@@ -39,6 +39,14 @@ with Nullgate() as ng:
 ```
 
 `scores` follow the order of `labels`; `model` is `fast`, `balanced` (default) or `precise`.
+
+```python
+with Nullgate() as ng:
+    matched = ng.match(Path("photo.jpg").read_bytes(), queries=["a cat", "a dog"])
+    print(matched.results[0].scores)
+```
+
+Match scores are independent probabilities in query order, not a distribution that sums to one.
 Errors: catch `NullgateError` and inspect `code`, `message`, `request_id`, and `status`; maintenance retries are automatic.
 Action `value` fields cannot contain strings, regardless of event type; sensor calls reject them with `invalid_actions`.
 Pass `transport=` to inject an HTTPX API transport (sync or async); it never handles target requests or ThreatMetrix sockets.
@@ -47,7 +55,7 @@ Use `from nullgate.akamai import is_enough, abck_counters` to stop ordinary sens
 Omitted `inputs`/`actions` preserve collection defaults; `[]` sends an explicitly empty collection. Call `result.report()` after a target failure; `True` means HTTP delivery only.
 Keep passing `script` to `page.sensor`; the SDK uploads it only until the server retains it, and retries once if needed.
 The SDK uses gzip for bodies of at least 1024 bytes from the first request; transports see compressed bytes, and HTTP 415 disables compression.
-`classify` sends images as raw `multipart/form-data` parts and never uses gzip.
+`classify` and `match` send images as raw `multipart/form-data` parts and never use gzip.
 
 Use `from nullgate.aio import Nullgate` for async network methods and `await result.wait()`.
 Runnable scripts: `examples/akamai.py`, `examples/amazon.py`, `examples/threatmetrix.py`, `examples/kleinanzeigen.py`.

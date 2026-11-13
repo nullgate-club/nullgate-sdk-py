@@ -21,7 +21,15 @@ import httpx
 
 from . import amazon
 from .akamai.inputs import _prepare_actions, _prepared_input, prepare_inputs
-from .classifier import Classified, Image, _classified, _request
+from .classifier import (
+    Classified,
+    Image,
+    Matched,
+    _classified,
+    _images,
+    _matched,
+    _request,
+)
 from .errors import NullgateError, _retry_after
 from .html import Candidate, discover
 from .models import Page as Document
@@ -369,6 +377,27 @@ class Nullgate:
             ],
         )
         return _classified(data, images=len(batch), labels=names)
+
+    async def match(
+        self, images: Image | Sequence[Image], *, queries: Sequence[str]
+    ) -> Matched:
+        """Score each image against every query; one result per image."""
+        batch = _images(images)
+        if isinstance(queries, str) or not queries:
+            raise NullgateError(
+                "queries must contain at least 1 item", code="invalid_request"
+            )
+        names = list(queries)
+        data = await self._request(
+            "POST",
+            "/classifier/match",
+            form={"query": names},
+            files=[
+                ("image", ("image", image, "application/octet-stream"))
+                for image in batch
+            ],
+        )
+        return _matched(data, images=len(batch), queries=len(names))
 
     async def aclose(self) -> None:
         for profile in tuple(self._profiles):

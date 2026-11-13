@@ -13,7 +13,7 @@ from uuid import UUID
 import httpx
 
 from . import aio
-from .classifier import Classified, Image
+from .classifier import Classified, Image, Matched
 from .profile import Profile, _ProfileLoop
 from .target import TargetFetch
 
@@ -136,6 +136,12 @@ class Nullgate:
     ) -> Classified:
         """Score each image against every label; one result per image."""
         return self._loop.run(self._async.classify(images, labels=labels, model=model))
+
+    def match(
+        self, images: Image | Sequence[Image], *, queries: Sequence[str]
+    ) -> Matched:
+        """Score each image against every query; one result per image."""
+        return self._loop.run(self._async.match(images, queries=queries))
 
     def close(self) -> None:
         if not self._closed:

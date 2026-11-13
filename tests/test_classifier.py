@@ -6,7 +6,7 @@ import pytest
 
 from nullgate import Nullgate, NullgateError
 from nullgate.aio import Nullgate as AsyncNullgate
-from nullgate.classifier import Classification, Classified
+from nullgate.classifier import Classification, Classified, Match, Matched
 
 LABELS = ["cat", "dog", "bird"]
 SMALL = b"\x89PNG\r\n\x1a\n\x00\xff"
@@ -188,3 +188,115 @@ def test_classify_rejects_response_that_does_not_match_the_request(data):
             False, lambda request: httpx.Response(200, json=data), SMALL, labels=LABELS
         )
     assert error.value.code == "invalid_response"
+
+
+def match(asynchronous, handler, images, *, queries):
+    transport = httpx.MockTransport(handler)
+    if asynchronous:
+
+        async def run():
+            async with AsyncNullgate("test-key", transport=transport) as ng:
+                return await ng.match(images, queries=queries)
+
+        return asyncio.run(run())
+    with Nullgate("test-key", transport=transport) as ng:
+        return ng.match(images, queries=queries)
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
+def test_match_sends_raw_parts_and_preserves_image_and_query_order(asynchronous):
+    def handler(request):
+        assert (request.method, request.url.path) == ("POST", "/classifier/match")
+        assert request.headers["Authorization"] == "Bearer test-key"
+        assert request.headers["Content-Type"].startswith(
+            "multipart/form-data; boundary="
+        )
+        assert "Content-Encoding" not in request.headers
+        parts = sent(request)
+        assert sorted(set(name for name, _ in parts)) == ["image", "query"]
+        assert [value for name, value in parts if name == "image"] == [SMALL, LARGE]
+        assert [value.decode() for name, value in parts if name == "query"] == [
+            "кот",
+            "dog",
+        ]
+        return httpx.Response(
+            200, json={"results": [{"scores": [0.9, 0.8]}, {"scores": [0, 1]}]}
+        )
+
+    result = match(asynchronous, handler, [SMALL, LARGE], queries=["кот", "dog"])
+    assert result == Matched([Match([0.9, 0.8]), Match([0.0, 1.0])])
+
+
+@pytest.mark.parametrize(
+    "images,queries",
+    [
+        ([], ["cat"]),
+        ([SMALL] * 33, ["cat"]),
+        (b"", ["cat"]),
+        ([SMALL, "bad"], ["cat"]),
+        ("bad", ["cat"]),
+        (SMALL, []),
+        (SMALL, "cat"),
+    ],
+)
+def test_match_rejects_certain_invalid_inputs_without_request(images, queries):
+    calls = []
+
+    def handler(request):
+        calls.append(request)
+        return httpx.Response(500)
+
+    with pytest.raises(NullgateError) as error:
+        match(False, handler, images, queries=queries)
+    assert error.value.code == "invalid_request"
+    assert calls == []
+
+
+@pytest.mark.parametrize(
+    "data",
+    [
+        {},
+        {"results": []},
+        {"results": ["bad"]},
+        {"results": [{"scores": []}]},
+        {"results": [{"scores": ["0.5"]}]},
+        {"results": [{"scores": [True]}]},
+        {"results": [{"scores": [-0.1]}]},
+        {"results": [{"scores": [1.1]}]},
+    ],
+)
+def test_match_rejects_invalid_response(data):
+    with pytest.raises(NullgateError) as error:
+        match(
+            False,
+            lambda request: httpx.Response(200, json=data),
+            SMALL,
+            queries=["cat"],
+        )
+    assert error.value.code == "invalid_response"
+
+
+@pytest.mark.parametrize(
+    "status,code",
+    [
+        (401, "unauthorized"),
+        (402, "insufficient_balance"),
+        (413, "invalid_request"),
+        (503, "unavailable"),
+    ],
+)
+def test_match_preserves_server_error(status, code):
+    def handler(request):
+        return httpx.Response(
+            status,
+            json={"code": code, "message": "Safe explanation", "request_id": "id"},
+        )
+
+    with pytest.raises(NullgateError) as error:
+        match(False, handler, SMALL, queries=["cat"])
+    assert (
+        error.value.code,
+        error.value.message,
+        error.value.request_id,
+        error.value.status,
+    ) == (code, "Safe explanation", "id", status)
