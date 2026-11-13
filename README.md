@@ -62,6 +62,7 @@ with Nullgate() as ng:
 ```
 
 Optionally pass `started_at_ms` as the challenge start time in Unix milliseconds.
+The server accepts times from 10 minutes before to 1 minute after its current time.
 Without it, the server uses its current time. `proof.send_at` is the earliest
 submission time in Unix seconds. In the async client, use `await proof.wait()`.
 
