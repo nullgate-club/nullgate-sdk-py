@@ -1,7 +1,6 @@
-"""Image classification request and response shapes."""
+"""Image classification request validation and response shapes."""
 
 import math
-from base64 import b64encode
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
@@ -30,7 +29,7 @@ class Classified:
 
 def _request(
     images: Image | Sequence[Image], labels: Sequence[str]
-) -> tuple[list[str], list[str]]:
+) -> tuple[list[bytes], list[str]]:
     batch = [images] if isinstance(images, Image) else images
     if isinstance(batch, str) or not isinstance(batch, Sequence):
         raise NullgateError(
@@ -46,7 +45,7 @@ def _request(
         raise NullgateError(
             "labels must contain at least 2 items", code="invalid_request"
         )
-    return [b64encode(image).decode("ascii") for image in batch], list(labels)
+    return [bytes(image) for image in batch], list(labels)
 
 
 def _classified(data: dict[str, Any], *, images: int, labels: list[str]) -> Classified:

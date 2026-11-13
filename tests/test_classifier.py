@@ -1,7 +1,5 @@
 import asyncio
-import gzip
-import json
-from base64 import b64decode
+from email import message_from_bytes
 
 import httpx
 import pytest
@@ -35,14 +33,18 @@ def classify(asynchronous, handler, images, **kwargs):
 
 
 def sent(request):
-    body = request.content
-    if request.headers.get("Content-Encoding") == "gzip":
-        body = gzip.decompress(body)
-    return json.loads(body)
+    head = b"Content-Type: " + request.headers["Content-Type"].encode() + b"\r\n\r\n"
+    return [
+        (
+            part.get_param("name", header="content-disposition"),
+            part.get_payload(decode=True),
+        )
+        for part in message_from_bytes(head + request.content).get_payload()
+    ]
 
 
 @pytest.mark.parametrize("asynchronous", [False, True])
-def test_classify_sends_base64_images_and_returns_one_result_per_image(asynchronous):
+def test_classify_sends_raw_image_parts_and_returns_one_result_per_image(asynchronous):
     def handler(request):
         return httpx.Response(
             200,
@@ -61,15 +63,13 @@ def test_classify_sends_base64_images_and_returns_one_result_per_image(asynchron
     (request,) = calls
     assert (request.method, request.url.path) == ("POST", "/classifier/classify")
     assert request.headers["Authorization"] == "Bearer test-key"
-    assert request.headers["Content-Encoding"] == "gzip"
-    body = sent(request)
-    assert set(body) == {"model", "images", "labels"}
-    assert body["model"] == "precise"
-    assert body["labels"] == LABELS
-    assert [b64decode(image, validate=True) for image in body["images"]] == [
-        SMALL,
-        LARGE,
-    ]
+    assert request.headers["Content-Type"].startswith("multipart/form-data; boundary=")
+    assert "Content-Encoding" not in request.headers
+    parts = sent(request)
+    assert sorted(set(name for name, _ in parts)) == ["image", "label", "model"]
+    assert [value for name, value in parts if name == "image"] == [SMALL, LARGE]
+    assert [value.decode() for name, value in parts if name == "label"] == LABELS
+    assert [value for name, value in parts if name == "model"] == [b"precise"]
     assert result == Classified(
         "precise",
         [
@@ -90,10 +90,14 @@ def test_classify_wraps_one_image_and_leaves_default_model_to_server(image):
             },
         )
 
-    result, calls = classify(False, handler, image, labels=tuple(LABELS))
-    body = sent(calls[0])
-    assert set(body) == {"images", "labels"}
-    assert [b64decode(item, validate=True) for item in body["images"]] == [SMALL]
+    result, calls = classify(False, handler, image, labels=("кот", "dog", "bird"))
+    parts = sent(calls[0])
+    assert [(name, value.decode()) for name, value in parts[:-1]] == [
+        ("label", "кот"),
+        ("label", "dog"),
+        ("label", "bird"),
+    ]
+    assert parts[-1] == ("image", SMALL)
     assert result.model == "balanced"
     assert [item.label for item in result.results] == ["bird"]
 

@@ -201,6 +201,8 @@ class Nullgate:
         payload: dict[str, object] | None = None,
         params: dict[str, str] | None = None,
         sensor_script: str | None = None,
+        form: dict[str, str | list[str]] | None = None,
+        files: list[tuple[str, tuple[str, bytes, str]]] | None = None,
     ) -> dict[str, Any]:
         deadline = time.monotonic() + self._timeout
         body = (
@@ -220,6 +222,7 @@ class Nullgate:
                 not self._request_gzip_disabled
                 and not gzip_retried
                 and method != "GET"
+                and files is None
                 and len(body) >= 1024
             )
             headers = {"Authorization": f"Bearer {self._key}"}
@@ -234,7 +237,15 @@ class Nullgate:
                     method,
                     self._base_url + path,
                     headers=headers,
-                    content=compressed_body if compressed else body,
+                    content=(
+                        None
+                        if files is not None
+                        else compressed_body
+                        if compressed
+                        else body
+                    ),
+                    data=form,
+                    files=files,
                     params=params,
                     timeout=max(0.001, deadline - time.monotonic()),
                 )
@@ -344,12 +355,20 @@ class Nullgate:
         model: str | None = None,
     ) -> Classified:
         """Score each image against every label; one result per image."""
-        encoded, names = _request(images, labels)
-        payload: dict[str, object] = {"images": encoded, "labels": names}
+        batch, names = _request(images, labels)
+        form: dict[str, str | list[str]] = {"label": names}
         if model is not None:
-            payload["model"] = model
-        data = await self._request("POST", "/classifier/classify", payload=payload)
-        return _classified(data, images=len(encoded), labels=names)
+            form["model"] = model
+        data = await self._request(
+            "POST",
+            "/classifier/classify",
+            form=form,
+            files=[
+                ("image", ("image", image, "application/octet-stream"))
+                for image in batch
+            ],
+        )
+        return _classified(data, images=len(batch), labels=names)
 
     async def aclose(self) -> None:
         for profile in tuple(self._profiles):
