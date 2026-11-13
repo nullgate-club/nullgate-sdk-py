@@ -13,7 +13,7 @@ from uuid import UUID
 import httpx
 
 from . import aio
-from .amazon import AcicPow, AcicWaf
+from .amazon import AcicWaf
 from .classifier import Classified, Image, Matched
 from .profile import Profile, _ProfileLoop
 from .target import TargetFetch
@@ -48,6 +48,16 @@ class Fwcim:
 
     def report(self) -> bool:
         return self._reporter(self.request_id)
+
+
+@dataclass(frozen=True, slots=True)
+class AcicPow:
+    response: str = field(repr=False)
+    send_at: float
+    request_id: str
+
+    def wait(self) -> None:
+        time.sleep(max(0.0, self.send_at - time.time()))
 
 
 class _SyncTransport(httpx.AsyncBaseTransport):
@@ -145,12 +155,20 @@ class Nullgate:
         return self._loop.run(self._async.match(images, queries=queries))
 
     def acic_pow(
-        self, challenge_type: str, html: str, *, timeout: float = 90
+        self,
+        challenge_type: str,
+        html: str,
+        *,
+        started_at_ms: int | None = None,
+        timeout: float | None = None,
     ) -> AcicPow:
-        """Generate the response for the current ACIC proof-of-work challenge."""
-        return self._loop.run(
-            self._async.acic_pow(challenge_type, html, timeout=timeout)
+        """Generate a proof and its earliest Amazon submission time."""
+        value = self._loop.run(
+            self._async.acic_pow(
+                challenge_type, html, started_at_ms=started_at_ms, timeout=timeout
+            )
         )
+        return AcicPow(value.response, value.send_at, value.request_id)
 
     def acic_waf(
         self, problem: Mapping[str, object], *, timeout: float | None = None

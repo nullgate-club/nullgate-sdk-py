@@ -21,12 +21,6 @@ from .models import Page
 
 
 @dataclass(frozen=True, slots=True)
-class AcicPow:
-    response: str = field(repr=False)
-    request_id: str
-
-
-@dataclass(frozen=True, slots=True)
 class AcicWaf:
     client_solution: list[int]
     request_id: str

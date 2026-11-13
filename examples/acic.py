@@ -22,6 +22,7 @@ def main() -> None:
     with Nullgate() as ng:
         if args.kind == "pow":
             proof = ng.acic_pow(args.challenge_type, args.file.read_text())
+            proof.wait()
             print(proof.response)
         else:
             problem = json.loads(args.file.read_text())

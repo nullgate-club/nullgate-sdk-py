@@ -157,6 +157,16 @@ class Fwcim:
         return await self._reporter(self.request_id)
 
 
+@dataclass(frozen=True, slots=True)
+class AcicPow:
+    response: str = field(repr=False)
+    send_at: float
+    request_id: str
+
+    async def wait(self) -> None:
+        await asyncio.sleep(max(0.0, self.send_at - time.time()))
+
+
 class Nullgate:
     def __init__(
         self,
@@ -405,19 +415,34 @@ class Nullgate:
         return _matched(data, images=len(batch), queries=len(names))
 
     async def acic_pow(
-        self, challenge_type: str, html: str, *, timeout: float = 90
-    ) -> amazon.AcicPow:
-        """Generate the response for the current ACIC proof-of-work challenge."""
+        self,
+        challenge_type: str,
+        html: str,
+        *,
+        started_at_ms: int | None = None,
+        timeout: float | None = None,
+    ) -> AcicPow:
+        """Generate a proof and its earliest Amazon submission time."""
+        payload: dict[str, object] = {"challenge_type": challenge_type, "html": html}
+        if started_at_ms is not None:
+            payload["started_at_ms"] = started_at_ms
         data = await self._request(
-            "POST",
-            "/amazon/acic/pow",
-            payload={"challenge_type": challenge_type, "html": html},
-            timeout=timeout,
+            "POST", "/amazon/acic/pow", payload=payload, timeout=timeout
         )
-        response, request_id = data.get("response"), data.get("request_id")
-        if not isinstance(response, str) or not isinstance(request_id, str):
+        response, request_id, send_at = (
+            data.get("response"),
+            data.get("request_id"),
+            data.get("send_at"),
+        )
+        if (
+            not isinstance(response, str)
+            or not isinstance(request_id, str)
+            or not isinstance(send_at, (int, float))
+            or isinstance(send_at, bool)
+            or not math.isfinite(send_at)
+        ):
             raise NullgateError("Invalid ACIC response", code="invalid_response")
-        return amazon.AcicPow(response, request_id)
+        return AcicPow(response, float(send_at), request_id)
 
     async def acic_waf(
         self, problem: Mapping[str, object], *, timeout: float | None = None

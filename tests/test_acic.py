@@ -24,7 +24,7 @@ def call(asynchronous, method, handler, *args, **kwargs):
 
 
 @pytest.mark.parametrize("asynchronous", [False, True])
-def test_pow_sends_compressed_html_and_uses_90_second_timeout(asynchronous):
+def test_pow_sends_compressed_html_and_uses_client_timeout(asynchronous):
     def handler(request):
         assert (request.method, request.url.path) == ("POST", "/amazon/acic/pow")
         assert request.headers["authorization"] == "Bearer test-key"
@@ -33,16 +33,31 @@ def test_pow_sends_compressed_html_and_uses_90_second_timeout(asynchronous):
         assert json.loads(gzip.decompress(request.content)) == {
             "challenge_type": "PROOF_OF_WORK_LEVEL_3",
             "html": "x" * 2048,
+            "started_at_ms": 1700000000000,
         }
-        assert 89 < request.extensions["timeout"]["read"] <= 90
+        assert 9 < request.extensions["timeout"]["read"] <= 10
         return httpx.Response(
-            200, json={"response": '{"data":"proof"}', "request_id": "pow-id"}
+            200,
+            json={
+                "response": '{"data":"proof"}',
+                "request_id": "pow-id",
+                "send_at": 123.5,
+            },
         )
 
     result = call(
-        asynchronous, "acic_pow", handler, "PROOF_OF_WORK_LEVEL_3", "x" * 2048
+        asynchronous,
+        "acic_pow",
+        handler,
+        "PROOF_OF_WORK_LEVEL_3",
+        "x" * 2048,
+        started_at_ms=1700000000000,
     )
-    assert (result.response, result.request_id) == ('{"data":"proof"}', "pow-id")
+    assert (result.response, result.request_id, result.send_at) == (
+        '{"data":"proof"}',
+        "pow-id",
+        123.5,
+    )
 
 
 @pytest.mark.parametrize("asynchronous", [False, True])
@@ -105,6 +120,29 @@ def test_unsupported_is_not_retried(asynchronous, method, args):
 def test_pow_accepts_call_timeout(asynchronous):
     def handler(request):
         assert 19 < request.extensions["timeout"]["read"] <= 20
-        return httpx.Response(200, json={"response": "proof", "request_id": "id"})
+        assert "started_at_ms" not in json.loads(request.content)
+        return httpx.Response(
+            200, json={"response": "proof", "request_id": "id", "send_at": 0}
+        )
 
     call(asynchronous, "acic_pow", handler, "type", "html", timeout=20)
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
+def test_pow_waits_until_send_time(asynchronous, monkeypatch):
+    delays = []
+    monkeypatch.setattr("time.time", lambda: 100.0)
+    if asynchronous:
+        from nullgate.aio import AcicPow
+
+        async def sleep(delay):
+            delays.append(delay)
+
+        monkeypatch.setattr("asyncio.sleep", sleep)
+        asyncio.run(AcicPow("proof", 102.5, "id").wait())
+    else:
+        from nullgate.client import AcicPow
+
+        monkeypatch.setattr("time.sleep", delays.append)
+        AcicPow("proof", 102.5, "id").wait()
+    assert delays == [2.5]

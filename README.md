@@ -50,15 +50,20 @@ Match scores are independent probabilities in query order, not a distribution th
 
 ### Amazon ACIC
 
-Pass the current ACIC action type and challenge HTML. Assign the returned response
-verbatim, without JSON-encoding it again. PoW defaults to a 90-second timeout.
+Pass the current ACIC action type and challenge HTML. Wait before submitting the
+response to Amazon. Assign it verbatim, without JSON-encoding it again.
 
 ```python
 with Nullgate() as ng:
     proof = ng.acic_pow(acic_result["actionType"], acic_html)
+    proof.wait()
     acic_body["context"] = acic_result["clientSideContext"]
     acic_body["response"] = proof.response
 ```
+
+Optionally pass `started_at_ms` as the challenge start time in Unix milliseconds.
+Without it, the server uses its current time. `proof.send_at` is the earliest
+submission time in Unix seconds. In the async client, use `await proof.wait()`.
 
 For AWS WAF, record `presented_at = time.monotonic()` when the problem arrives.
 Pass the original problem unchanged and send the verification body with your own client.
