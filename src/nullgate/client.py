@@ -13,6 +13,7 @@ from uuid import UUID
 import httpx
 
 from . import aio
+from .amazon import AcicPow, AcicWaf
 from .classifier import Classified, Image, Matched
 from .profile import Profile, _ProfileLoop
 from .target import TargetFetch
@@ -142,6 +143,20 @@ class Nullgate:
     ) -> Matched:
         """Score each image against every query; one result per image."""
         return self._loop.run(self._async.match(images, queries=queries))
+
+    def acic_pow(
+        self, challenge_type: str, html: str, *, timeout: float = 90
+    ) -> AcicPow:
+        """Generate the response for the current ACIC proof-of-work challenge."""
+        return self._loop.run(
+            self._async.acic_pow(challenge_type, html, timeout=timeout)
+        )
+
+    def acic_waf(
+        self, problem: Mapping[str, object], *, timeout: float | None = None
+    ) -> AcicWaf:
+        """Generate image indexes for an original AWS WAF problem."""
+        return self._loop.run(self._async.acic_waf(problem, timeout=timeout))
 
     def close(self) -> None:
         if not self._closed:

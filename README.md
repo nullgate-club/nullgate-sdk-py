@@ -47,6 +47,36 @@ with Nullgate() as ng:
 ```
 
 Match scores are independent probabilities in query order, not a distribution that sums to one.
+
+### Amazon ACIC
+
+Pass the current ACIC action type and challenge HTML. Assign the returned response
+verbatim, without JSON-encoding it again. PoW defaults to a 90-second timeout.
+
+```python
+with Nullgate() as ng:
+    proof = ng.acic_pow(acic_result["actionType"], acic_html)
+    acic_body["context"] = acic_result["clientSideContext"]
+    acic_body["response"] = proof.response
+```
+
+For AWS WAF, record `presented_at = time.monotonic()` when the problem arrives.
+Pass the original problem unchanged and send the verification body with your own client.
+
+```python
+import time
+
+with Nullgate() as ng:
+    selection = ng.acic_waf(problem)
+    waf_body = selection.verification_body(
+        problem, elapsed_seconds=time.monotonic() - presented_at, locale="en-US"
+    )
+```
+
+Each successful generation charges one `amazon.acic` operation. Unsupported
+challenges raise `NullgateError` with code `unsupported`. The SDK does not submit
+answers to Amazon or AWS. ACIC JSON bodies use the normal gzip path.
+
 Errors: catch `NullgateError` and inspect `code`, `message`, `request_id`, and `status`; maintenance retries are automatic.
 Action `value` fields cannot contain strings, regardless of event type; sensor calls reject them with `invalid_actions`.
 Pass `transport=` to inject an HTTPX API transport (sync or async); it never handles target requests or ThreatMetrix sockets.

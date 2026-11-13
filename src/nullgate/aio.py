@@ -211,8 +211,13 @@ class Nullgate:
         sensor_script: str | None = None,
         form: dict[str, str | list[str]] | None = None,
         files: list[tuple[str, tuple[str, bytes, str]]] | None = None,
+        timeout: float | None = None,
     ) -> dict[str, Any]:
-        deadline = time.monotonic() + self._timeout
+        if timeout is not None and (not math.isfinite(timeout) or timeout <= 0):
+            raise NullgateError(
+                "timeout must be positive and finite", code="invalid_request"
+            )
+        deadline = time.monotonic() + (self._timeout if timeout is None else timeout)
         body = (
             json.dumps(
                 payload, ensure_ascii=False, separators=(",", ":"), allow_nan=False
@@ -398,6 +403,40 @@ class Nullgate:
             ],
         )
         return _matched(data, images=len(batch), queries=len(names))
+
+    async def acic_pow(
+        self, challenge_type: str, html: str, *, timeout: float = 90
+    ) -> amazon.AcicPow:
+        """Generate the response for the current ACIC proof-of-work challenge."""
+        data = await self._request(
+            "POST",
+            "/amazon/acic/pow",
+            payload={"challenge_type": challenge_type, "html": html},
+            timeout=timeout,
+        )
+        response, request_id = data.get("response"), data.get("request_id")
+        if not isinstance(response, str) or not isinstance(request_id, str):
+            raise NullgateError("Invalid ACIC response", code="invalid_response")
+        return amazon.AcicPow(response, request_id)
+
+    async def acic_waf(
+        self, problem: Mapping[str, object], *, timeout: float | None = None
+    ) -> amazon.AcicWaf:
+        """Generate image indexes for an original AWS WAF problem."""
+        data = await self._request(
+            "POST",
+            "/amazon/acic/waf",
+            payload={"problem": dict(problem)},
+            timeout=timeout,
+        )
+        solution, request_id = data.get("client_solution"), data.get("request_id")
+        if (
+            not isinstance(solution, list)
+            or not all(type(index) is int for index in solution)
+            or not isinstance(request_id, str)
+        ):
+            raise NullgateError("Invalid ACIC response", code="invalid_response")
+        return amazon.AcicWaf(solution, request_id)
 
     async def aclose(self) -> None:
         for profile in tuple(self._profiles):

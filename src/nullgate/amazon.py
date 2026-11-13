@@ -20,6 +20,31 @@ from .akamai.inputs import (
 from .models import Page
 
 
+@dataclass(frozen=True, slots=True)
+class AcicPow:
+    response: str = field(repr=False)
+    request_id: str
+
+
+@dataclass(frozen=True, slots=True)
+class AcicWaf:
+    client_solution: list[int]
+    request_id: str
+
+    def verification_body(
+        self, problem: Mapping[str, object], *, elapsed_seconds: float, locale: str
+    ) -> dict[str, object]:
+        """Build the AWS verification body without sending it."""
+        return {
+            "state": problem["state"],
+            "key": problem["key"],
+            "hmac_tag": problem["hmac_tag"],
+            "client_solution": self.client_solution,
+            "metrics": {"solve_time_millis": int(elapsed_seconds * 1000)},
+            "locale": locale,
+        }
+
+
 class Geometry(TypedDict):
     width: float
     height: float
