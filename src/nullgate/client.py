@@ -13,6 +13,7 @@ from uuid import UUID
 import httpx
 
 from . import aio
+from .classifier import Classified, Image
 from .profile import Profile, _ProfileLoop
 from .target import TargetFetch
 
@@ -125,6 +126,16 @@ class Nullgate:
         return self._loop.run(
             self._async.usage(interval=interval, start=start, end=end)
         )
+
+    def classify(
+        self,
+        images: Image | Sequence[Image],
+        *,
+        labels: Sequence[str],
+        model: str | None = None,
+    ) -> Classified:
+        """Score each image against every label; one result per image."""
+        return self._loop.run(self._async.classify(images, labels=labels, model=model))
 
     def close(self) -> None:
         if not self._closed:

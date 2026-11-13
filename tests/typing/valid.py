@@ -9,6 +9,7 @@ from nullgate import (
     prepare_inputs,
 )
 from nullgate.aio import Nullgate as AsyncNullgate
+from nullgate.classifier import Classified
 
 
 def sync_example(ng: Nullgate, html: str) -> None:
@@ -35,6 +36,9 @@ def sync_example(ng: Nullgate, html: str) -> None:
     assert_type(request.report(), bool)
     assert_type(ng.report(request.request_id), bool)
     page.pixel(script="source", script_url="/pixel", challenge="123")
+    assert_type(ng.classify(b"image", labels=["cat", "dog"]), Classified)
+    scores = ng.classify([b"image", bytearray(b"image")], labels=("cat", "dog"))
+    assert_type(scores.results[0].scores, list[float])
 
 
 async def async_example(ng: AsyncNullgate, html: str) -> None:
@@ -58,6 +62,8 @@ async def async_example(ng: AsyncNullgate, html: str) -> None:
     assert_type(await request.report(), bool)
     assert_type(await ng.report(request.request_id), bool)
     await page.pixel(script="source", script_url="/pixel", challenge="123")
+    classified = await ng.classify(b"image", labels=["cat", "dog"], model="fast")
+    assert_type(classified.results[0].label, str)
 
     def send(request: TargetRequest) -> TargetResponse:
         return TargetResponse(200, {}, b"body")

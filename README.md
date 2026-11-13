@@ -28,6 +28,17 @@ with Nullgate() as ng, httpx.Client(headers={"User-Agent": UA}) as http:
 Amazon: `page.fwcim(form="#signin", timing=performance_timing, inputs={"ap_email": email})` returns `metadata1`.
 ThreatMetrix: `async with page.threatmetrix(send=my_send) as tmx:` then `await tmx.pagehide()`.
 For wrapper scripts, pass `collector={"url": url, "org_id": org, "session_id": visit}` instead of `script_url`; see `examples/kleinanzeigen.py`.
+Images: `ng.classify(images, labels=[...])` takes raw JPEG/PNG/WebP bytes, one image or up to 32, and returns one result per image.
+
+```python
+from pathlib import Path
+
+with Nullgate() as ng:
+    classified = ng.classify(Path("photo.jpg").read_bytes(), labels=["cat", "dog"], model="fast")
+    print(classified.results[0].label, classified.results[0].scores)
+```
+
+`scores` follow the order of `labels`; `model` is `fast`, `balanced` (default) or `precise`.
 Errors: catch `NullgateError` and inspect `code`, `message`, `request_id`, and `status`; maintenance retries are automatic.
 Action `value` fields cannot contain strings, regardless of event type; sensor calls reject them with `invalid_actions`.
 Pass `transport=` to inject an HTTPX API transport (sync or async); it never handles target requests or ThreatMetrix sockets.

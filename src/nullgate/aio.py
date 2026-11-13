@@ -21,6 +21,7 @@ import httpx
 
 from . import amazon
 from .akamai.inputs import _prepare_actions, _prepared_input, prepare_inputs
+from .classifier import Classified, Image, _classified, _request
 from .errors import NullgateError, _retry_after
 from .html import Candidate, discover
 from .models import Page as Document
@@ -334,6 +335,21 @@ class Nullgate:
                     value.isoformat() if isinstance(value, datetime) else value
                 )
         return await self._request("GET", "/account/usage", params=params)
+
+    async def classify(
+        self,
+        images: Image | Sequence[Image],
+        *,
+        labels: Sequence[str],
+        model: str | None = None,
+    ) -> Classified:
+        """Score each image against every label; one result per image."""
+        encoded, names = _request(images, labels)
+        payload: dict[str, object] = {"images": encoded, "labels": names}
+        if model is not None:
+            payload["model"] = model
+        data = await self._request("POST", "/classifier/classify", payload=payload)
+        return _classified(data, images=len(encoded), labels=names)
 
     async def aclose(self) -> None:
         for profile in tuple(self._profiles):
