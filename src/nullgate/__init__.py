@@ -1,5 +1,6 @@
-"""Prepare target requests with Nullgate. Your HTTP client sends them."""
+"""Prepare target requests with Nullgate. Use ``acic`` for local ACIC discovery."""
 
+from . import acic
 from .akamai import PreparedInput, abck_counters, is_enough, prepare_inputs
 from .client import Nullgate
 from .errors import NullgateError
@@ -11,6 +12,7 @@ __all__ = [
     "PreparedInput",
     "TargetRequest",
     "TargetResponse",
+    "acic",
     "abck_counters",
     "is_enough",
     "prepare_inputs",

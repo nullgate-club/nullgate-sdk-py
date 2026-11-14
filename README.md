@@ -83,6 +83,13 @@ Each successful generation charges one `amazon.acic` operation. Unsupported
 challenges raise `NullgateError` with code `unsupported`. The SDK does not submit
 answers to Amazon or AWS. ACIC JSON bodies use the normal gzip path.
 
+Use `from nullgate import acic` for local discovery and target request preparation:
+`acic.discover(url, html)`, `acic.parse_result(headers)` and
+`acic.discover_waf(url, html)`. The returned setup builds `start()`, `answer(...)`
+and `continuation(...)` requests for your existing HTTP client.
+See [the complete PoW/WAF flow](examples/acic.py) and
+[the ACIC guide](https://nullgate.club/en/amazon-acic).
+
 Errors: catch `NullgateError` and inspect `code`, `message`, `request_id`, and `status`; maintenance retries are automatic.
 Action `value` fields cannot contain strings, regardless of event type; sensor calls reject them with `invalid_actions`.
 Pass `transport=` to inject an HTTPX API transport (sync or async); it never handles target requests or ThreatMetrix sockets.
@@ -94,7 +101,7 @@ The SDK uses gzip for bodies of at least 1024 bytes from the first request; tran
 `classify` and `match` send images as raw `multipart/form-data` parts and never use gzip.
 
 Use `from nullgate.aio import Nullgate` for async network methods and `await result.wait()`.
-Runnable scripts: `examples/akamai.py`, `examples/amazon.py`, `examples/threatmetrix.py`, `examples/kleinanzeigen.py`.
+Runnable scripts: `examples/akamai.py`, `examples/amazon.py`, `examples/acic.py`, `examples/threatmetrix.py`, `examples/kleinanzeigen.py`.
 Run development checks with `make check`.
 
-[Documentation and callback recipes](https://docs.nullgate.club)
+[Documentation and callback recipes](https://nullgate.club)
