@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="assets/logo.svg" alt="nullgate" width="360">
+<img src="assets/readme.svg" alt="Nullgate" width="100%">
 
 # Nullgate Python SDK 2
 
