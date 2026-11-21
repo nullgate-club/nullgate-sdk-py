@@ -748,6 +748,7 @@ class Page:
         inputs: Inputs | None = None,
         actions: Sequence[Mapping[str, object]] | None = None,
         challenge: str | None = None,
+        iframe: bool = False,
     ) -> Request:
         candidate = self._candidate(kind, script_url, challenge)
         if candidate is None:
@@ -760,6 +761,8 @@ class Page:
             payload.update(script_url=candidate.url, script=script)
             if kind == "pixel":
                 payload["challenge"] = candidate.challenge
+                if iframe:
+                    payload["iframe"] = True
             else:
                 names = (
                     {"_abck", "bm_sz"}
@@ -849,9 +852,16 @@ class Page:
         script: str,
         script_url: str | None = None,
         challenge: str | None = None,
+        iframe: bool = False,
     ) -> Request:
+        if not isinstance(iframe, bool):
+            raise NullgateError("iframe must be a bool", code="invalid_request")
         return await self._generate(
-            "pixel", script=script, script_url=script_url, challenge=challenge
+            "pixel",
+            script=script,
+            script_url=script_url,
+            challenge=challenge,
+            iframe=iframe,
         )
 
     async def sbsd(

@@ -266,10 +266,11 @@ class Page:
         script: str,
         script_url: str | None = None,
         challenge: str | None = None,
+        iframe: bool = False,
     ) -> Request:
         value = self._client._loop.run(
             self._active.pixel(
-                script=script, script_url=script_url, challenge=challenge
+                script=script, script_url=script_url, challenge=challenge, iframe=iframe
             )
         )
         return Request(

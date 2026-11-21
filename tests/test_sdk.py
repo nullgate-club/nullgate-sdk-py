@@ -112,6 +112,56 @@ def test_wire_body_matches_schema_and_continues_product_session(api, operation):
         assert "X-State-ID" not in calls[0].headers
 
 
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.parametrize(
+    "options,expected",
+    [({}, None), ({"iframe": False}, None), ({"iframe": True}, True)],
+)
+def test_pixel_iframe_is_sent_only_when_true(api, asynchronous, options, expected):
+    calls, _ = api
+
+    async def run():
+        async with AsyncNullgate("test-key") as ng:
+            page = ng.session(user_agent="browser").page(URL, HTML)
+            await page.pixel(
+                script="source", script_url="/pixel", challenge="123", **options
+            )
+
+    if asynchronous:
+        asyncio.run(run())
+    else:
+        with Nullgate("test-key") as ng:
+            page = ng.session(user_agent="browser").page(URL, HTML)
+            page.pixel(script="source", script_url="/pixel", challenge="123", **options)
+
+    body = json.loads(calls[0].content)
+    if expected is None:
+        assert "iframe" not in body
+    else:
+        assert body["iframe"] is True
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.parametrize("iframe", [1, 0, "true", None, [], {}])
+def test_pixel_rejects_non_boolean_iframe_without_request(api, asynchronous, iframe):
+    calls, _ = api
+
+    async def run():
+        async with AsyncNullgate("test-key") as ng:
+            page = ng.session(user_agent="browser").page(URL, HTML)
+            await page.pixel(script="source", script_url="/pixel", iframe=iframe)
+
+    with pytest.raises(NullgateError) as error:
+        if asynchronous:
+            asyncio.run(run())
+        else:
+            with Nullgate("test-key") as ng:
+                page = ng.session(user_agent="browser").page(URL, HTML)
+                page.pixel(script="source", script_url="/pixel", iframe=iframe)
+    assert error.value.code == "invalid_request"
+    assert calls == []
+
+
 def test_product_continuations_are_independent_and_pages_keep_document_identity(api):
     calls, _ = api
     with Nullgate("test-key") as ng:

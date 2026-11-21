@@ -62,6 +62,11 @@ Shared topics: [sessions](https://nullgate.club/en/sessions),
 
 ## 📦 Products
 
+### Akamai pixel
+
+Use `page.pixel(script=script, iframe=True)` to model a hidden, restricted
+cross-origin frame. This option requires an updated server. The default is `False`.
+
 ### Amazon FWCIM
 
 `page.fwcim(form="#signin", timing=performance_timing, inputs={"ap_email": email})`
