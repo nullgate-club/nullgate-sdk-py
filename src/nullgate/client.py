@@ -329,6 +329,31 @@ class Page:
             _reporter=self._client.report,
         )
 
+    def protect(
+        self,
+        *,
+        script: str,
+        send: TargetFetch | None = None,
+        sdk_config: Mapping[str, object] | None = None,
+        jwt_device_attributes: str | None = None,
+        jwt_agent_payload: str | None = None,
+        client_token: str | None = None,
+        token_host: str | None = None,
+        behavioral: Mapping[str, object] | None = None,
+    ) -> aio.Protect:
+        return self._client._loop.run(
+            self._active.protect(
+                script=script,
+                send=send,
+                sdk_config=sdk_config,
+                jwt_device_attributes=jwt_device_attributes,
+                jwt_agent_payload=jwt_agent_payload,
+                client_token=client_token,
+                token_host=token_host,
+                behavioral=behavioral,
+            )
+        )
+
     def threatmetrix(
         self,
         *,

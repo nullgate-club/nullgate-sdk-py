@@ -7,7 +7,7 @@
 **Prepare protection requests. Your HTTP client sends them.**
 
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
-[![Products](https://img.shields.io/badge/products-Akamai%20%C2%B7%20Amazon%20%C2%B7%20ThreatMetrix%20%C2%B7%20Classifier-56856a)](#-what-it-does)
+[![Products](https://img.shields.io/badge/products-Akamai%20%C2%B7%20Amazon%20%C2%B7%20PingOne%20%C2%B7%20ThreatMetrix%20%C2%B7%20Classifier-56856a)](#-what-it-does)
 [![Docs](https://img.shields.io/badge/docs-nullgate.club-56856a)](https://nullgate.club)
 [![Telegram bot](https://img.shields.io/badge/Telegram-%40nullgate__app-26A5E4?logo=telegram&logoColor=white)](https://t.me/nullgate_app)
 
@@ -24,6 +24,7 @@ prepared requests with your own HTTP client, such as `httpx`.
 | Akamai | Sensor, pixel, and SBSD requests | `page.sensor()`, `page.pixel()`, `page.sbsd()` | [Akamai](https://nullgate.club/en/akamai) |
 | Amazon FWCIM | The `metadata1` form value | `page.fwcim()` | [Amazon](https://nullgate.club/en/amazon) |
 | Amazon ACIC | PoW and AWS WAF answers | `ng.acic_pow()`, `ng.acic_waf()` | [ACIC](https://nullgate.club/en/amazon-acic) |
+| PingOne Protect | Encoded device data | `page.protect()` | [Example](examples/pingone.py) |
 | ThreatMetrix | A full profiling session | `page.threatmetrix()` | [ThreatMetrix](https://nullgate.club/en/threatmetrix) |
 | Classifier | Image labels and text-query matches | `ng.classify()`, `ng.match()` | [Classifier](https://nullgate.club/en/classifier) |
 

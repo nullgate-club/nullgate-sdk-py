@@ -34,7 +34,7 @@ from .errors import NullgateError, _retry_after
 from .html import Candidate, discover
 from .models import Page as Document
 from .profile import ProfileAsync, _collector
-from .target import Target, TargetFetch
+from .target import Target, TargetFetch, TargetRequest
 
 __all__ = ["Nullgate", "NullgateError"]
 
@@ -165,6 +165,14 @@ class AcicPow:
 
     async def wait(self) -> None:
         await asyncio.sleep(max(0.0, self.send_at - time.time()))
+
+
+@dataclass(frozen=True, slots=True)
+class Protect:
+    data: str = field(repr=False)
+    sdk_version: str
+    device_id: str
+    request_id: str
 
 
 class Nullgate:
@@ -508,8 +516,10 @@ class Session:
         self._timezone = timezone
         self._sessions: dict[str, str] = {}
         self._sensor_retained: tuple[object, str, str] | None = None
+        self._pingone_retained: tuple[object, str, str] | None = None
         self._locks = {
-            product: asyncio.Lock() for product in ("akamai", "amazon", "threatmetrix")
+            product: asyncio.Lock()
+            for product in ("akamai", "amazon", "threatmetrix", "pingone")
         }
 
     def page(
@@ -559,6 +569,7 @@ class Page:
         self._document = document
         self._explicit_start = explicit_start
         self._sensor_document = object()
+        self._pingone_document = object()
         self._candidates, self._pixel_challenges, self._pixel_urls = discover(document)
 
     def _candidate(
@@ -946,6 +957,145 @@ class Page:
                 raise NullgateError(
                     "Invalid generation response", code="invalid_response"
                 ) from None
+
+    async def protect(
+        self,
+        *,
+        script: str,
+        send: TargetFetch | None = None,
+        sdk_config: Mapping[str, object] | None = None,
+        jwt_device_attributes: str | None = None,
+        jwt_agent_payload: str | None = None,
+        client_token: str | None = None,
+        token_host: str | None = None,
+        behavioral: Mapping[str, object] | None = None,
+    ) -> Protect:
+        """Generate PingOne data using a caller-owned target transport."""
+        if not isinstance(script, str) or not script:
+            raise NullgateError("script must be nonempty", code="invalid_request")
+        if client_token is None and not callable(send):
+            raise NullgateError(
+                "send is required without client_token", code="invalid_request"
+            )
+        session = self._session
+        async with session._locks["pingone"]:
+            common = session._common(self._document, "pingone")
+            website = {
+                key: common.pop(key)
+                for key in ("url", "html", "document_id", "started_at_ms")
+            }
+            common["website"] = website
+            if sdk_config is not None:
+                common["sdk_config"] = dict(sdk_config)
+            if token_host is not None:
+                common["token_host"] = token_host
+            digest = sha256(script.encode("utf-8")).hexdigest()
+            retained = session._pingone_retained == (
+                self._pingone_document,
+                session._sessions.get("pingone"),
+                digest,
+            )
+            if client_token is None:
+                prepared = await session._client._request(
+                    "POST",
+                    "/pingone/prepare",
+                    payload=common if retained else {**common, "script": script},
+                    sensor_script=script if retained else None,
+                )
+                try:
+                    value = prepared["request"]
+                    headers = value["headers"]
+                    url = value["url"]
+                    state = prepared["session"]
+                    if (
+                        not isinstance(state, str)
+                        or not state
+                        or value["role"] != "pingone.token"
+                        or value["method"] != "GET"
+                        or value["credentials"] != "include"
+                        or value["body"] is not None
+                        or not isinstance(headers, dict)
+                        or not all(
+                            isinstance(k, str) and isinstance(v, str)
+                            for k, v in headers.items()
+                        )
+                        or not isinstance(url, str)
+                    ):
+                        raise ValueError
+                    _url(url)
+                    if session._client._key in url or any(
+                        session._client._key in k or session._client._key in v
+                        for k, v in headers.items()
+                    ):
+                        raise ValueError
+                    request = TargetRequest(
+                        "pingone.token", url, "GET", headers, None, "include"
+                    )
+                except (KeyError, TypeError, ValueError, NullgateError):
+                    raise NullgateError(
+                        "Invalid prepare response", code="invalid_response"
+                    ) from None
+                session._sessions["pingone"] = state
+                common["session"] = state
+                session._pingone_retained = (self._pingone_document, state, digest)
+                retained = True
+                response = await Target(cast(TargetFetch, send), proxy=None)._fetch(
+                    request
+                )
+                if not 200 <= response.status < 300:
+                    raise NullgateError(
+                        "PingOne token request failed",
+                        code="target_error",
+                        status=response.status,
+                    )
+                try:
+                    common["token_response"] = response.body.decode("utf-8")
+                except UnicodeDecodeError:
+                    raise NullgateError(
+                        "Invalid token response encoding", code="invalid_response"
+                    ) from None
+            else:
+                common["client_token"] = client_token
+            if jwt_device_attributes is not None:
+                common["jwt_device_attributes"] = jwt_device_attributes
+            if jwt_agent_payload is not None:
+                common["jwt_agent_payload"] = jwt_agent_payload
+            if behavioral is not None:
+                common["behavioral"] = dict(behavioral)
+            if not retained:
+                common["script"] = script
+            try:
+                data = await session._client._request(
+                    "POST",
+                    "/pingone/protect",
+                    payload=common,
+                    sensor_script=script if retained else None,
+                )
+                if not all(
+                    isinstance(data.get(key), str) and data[key]
+                    for key in (
+                        "data",
+                        "sdk_version",
+                        "device_id",
+                        "session",
+                        "request_id",
+                    )
+                ):
+                    raise NullgateError(
+                        "Invalid protect response", code="invalid_response"
+                    )
+            except NullgateError:
+                session._pingone_retained = None
+                raise
+            session._sessions["pingone"] = data["session"]
+            session._pingone_retained = (
+                self._pingone_document,
+                data["session"],
+                digest,
+            )
+            return Protect(
+                data["data"], data["sdk_version"], data["device_id"], data["request_id"]
+            )
 
     def threatmetrix(
         self,
