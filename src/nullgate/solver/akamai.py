@@ -1,11 +1,11 @@
 """Target-side Akamai and ThreatMetrix solve flows."""
 
-from collections.abc import Mapping
 from urllib.parse import unquote, urljoin, urlsplit
 
-from ..aio import Page, Request, Session
+from ..aio import Request, Session
 from ..akamai import abck_counters, is_enough
 from ..errors import NullgateError
+from . import document
 from .models import SolveError
 from .transport import Transport
 
@@ -42,20 +42,6 @@ def _accepted(value: str | None) -> bool:
     return len(parts) >= 2 and parts[1] == "0"
 
 
-async def _page(session: Session, transport: Transport, url: str) -> tuple[Page, str]:
-    response = await transport.request("GET", url, navigation=True)
-    if not (200 <= response.status_code < 300 or response.status_code == 403):
-        raise SolveError("target_error", "Target page request failed", stage="page")
-    return session.page(str(response.url), response.text), str(response.url)
-
-
-async def _script(transport: Transport, url: str) -> str:
-    response = await transport.request("GET", url)
-    if not 200 <= response.status_code < 300:
-        raise SolveError("target_error", "Target script request failed", stage="script")
-    return response.text
-
-
 async def _post(transport: Transport, request: Request) -> None:
     await request.wait()
     response = await transport.request(
@@ -65,7 +51,7 @@ async def _post(transport: Transport, request: Request) -> None:
         raise SolveError("target_error", "Target submission failed", stage="target")
 
 
-async def akamai(
+async def solve(
     session: Session,
     transport: Transport,
     url: str,
@@ -75,11 +61,11 @@ async def akamai(
 ) -> None:
     stage = "page"
     try:
-        page, page_url = await _page(session, transport, url)
+        page, page_url = await document.load(session, transport, url)
         sbsd_url = page.sbsd_url
         if sbsd_url is not None:
             stage = "script"
-            source = await _script(transport, sbsd_url)
+            source = await document.script(transport, sbsd_url)
             stage = "generate"
             request = await page.sbsd(
                 script=source, cookies=transport.cookies, script_url=sbsd_url
@@ -87,7 +73,7 @@ async def akamai(
             stage = "target"
             await _post(transport, request)
             stage = "page"
-            page, page_url = await _page(session, transport, page_url)
+            page, page_url = await document.load(session, transport, page_url)
             if page.sbsd_url is not None:
                 raise SolveError(
                     "solve_failed", "Unsupported SBSD challenge", stage="page"
@@ -99,7 +85,7 @@ async def akamai(
                 "protection_not_found", "Akamai sensor not found", stage="page"
             )
         stage = "script"
-        source = await _script(transport, sensor_url)
+        source = await document.script(transport, sensor_url)
         pixel_url = page.pixel_url
 
         cookie = _abck(transport, page_url)
@@ -119,7 +105,7 @@ async def akamai(
             responses += 1
             if index == 0 and pixel_url is not None:
                 stage = "script"
-                pixel_source = await _script(transport, pixel_url)
+                pixel_source = await document.script(transport, pixel_url)
                 stage = "generate"
                 pixel = await page.pixel(
                     script=pixel_source, script_url=pixel_url, iframe=pixel_iframe
@@ -140,36 +126,6 @@ async def akamai(
         raise SolveError(
             exc.code,
             "Akamai generation failed",
-            stage=stage,
-            cause=type(exc.__cause__).__name__ if exc.__cause__ else None,
-            request_id=exc.request_id,
-            status=exc.status,
-        ) from None
-
-
-async def threatmetrix(
-    session: Session,
-    transport: Transport,
-    url: str,
-    *,
-    script_url: str | None = None,
-    collector: Mapping[str, str] | None = None,
-) -> None:
-    stage = "page"
-    try:
-        page, _ = await _page(session, transport, url)
-        stage = "profile"
-        async with page.threatmetrix(
-            send=transport.send,
-            proxy=transport.proxy,
-            script_url=script_url,
-            collector=collector,
-        ) as profile:
-            await profile.pagehide()
-    except NullgateError as exc:
-        raise SolveError(
-            exc.code,
-            "ThreatMetrix profile failed",
             stage=stage,
             cause=type(exc.__cause__).__name__ if exc.__cause__ else None,
             request_id=exc.request_id,
