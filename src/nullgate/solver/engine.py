@@ -13,11 +13,9 @@ import httpx
 
 from ..aio import Nullgate
 from ..errors import NullgateError
-from . import akamai, threatmetrix
-from .models import Options, SolveError
+from . import akamai, amazon, pingone, threatmetrix
+from .models import Options, Result, SolveError
 from .transport import Transport
-
-__all__ = ["SolveError", "Solver"]
 
 
 def _domain_matches(cookie: Cookie, host: str) -> bool:
@@ -110,7 +108,7 @@ class _State:
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
 
-class Solver:
+class Engine:
     """Own a bounded set of local sessions, without a browser or target logins."""
 
     def __init__(
@@ -138,7 +136,7 @@ class Solver:
         self._active: set[asyncio.Task[Any]] = set()
         self._closed = False
 
-    async def solve(self, **kwargs: Any) -> list[dict[str, object]]:
+    async def solve(self, **kwargs: Any) -> Result:
         try:
             request = Options(**kwargs)
         except TypeError:
@@ -206,6 +204,7 @@ class Solver:
                         stage="session",
                     )
                 async with state.lock:
+                    state.http.set_page(request.url)
                     if request.cookies is not None:
                         _replace_cookies(state.http, request.url, request.cookies)
                     profile = (
@@ -218,22 +217,40 @@ class Solver:
                         user_agent=state.user_agent, profile=profile
                     )
                     if request.type == "akamai":
-                        await akamai.solve(
+                        result = await akamai.solve(
                             sdk_session,
                             state.http,
                             request.url,
+                            html=request.html,
                             script_url=request.script_url,
                             pixel_iframe=request.pixel_iframe,
                         )
-                    else:
-                        await threatmetrix.solve(
+                    elif request.type == "threatmetrix":
+                        result = await threatmetrix.solve(
                             sdk_session,
                             state.http,
                             request.url,
+                            html=request.html,
                             script_url=request.script_url,
                             collector=request.collector,
                         )
-                    return _export_cookies(state.http, request.url)
+                    elif request.type == "pingone":
+                        result = await pingone.solve(
+                            sdk_session,
+                            state.http,
+                            request.url,
+                            html=request.html,
+                            script_url=request.script_url,
+                            pingone=request.pingone,
+                        )
+                    else:
+                        result = await amazon.solve(
+                            sdk_session, state.http, request.url, html=request.html
+                        )
+                    return {
+                        "cookies": _export_cookies(state.http, request.url),
+                        "result": result,
+                    }
         except TimeoutError:
             raise SolveError(
                 "timeout",
@@ -242,11 +259,13 @@ class Solver:
                 cause="TimeoutError",
             ) from None
         except NullgateError as error:
-            context = error.__context__
+            context = error.__cause__ or error.__context__
             raise SolveError(
                 error.code,
                 "Nullgate API request failed",
-                stage="generate",
+                stage="target"
+                if error.code in {"target_error", "transport_error", "upstream"}
+                else "generate",
                 cause=type(context).__name__ if context else None,
                 request_id=error.request_id,
                 status=error.status,

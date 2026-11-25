@@ -11,7 +11,8 @@ from urllib.parse import urlsplit
 import pytest
 from websockets.asyncio.server import serve
 
-from nullgate.solver import SolveError, Solver
+from nullgate.solver import SolveError
+from nullgate.solver.engine import Engine
 
 UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -155,7 +156,7 @@ def test_akamai_requires_acceptance_after_ordered_sensor_pixel_flow(
     state["accept"] = accepted
 
     async def run():
-        async with Solver("test-key", base_url=base, timeout=10) as solver:
+        async with Engine("test-key", base_url=base, timeout=10) as solver:
             if not accepted:
                 with pytest.raises(SolveError) as caught:
                     await solver.solve(
@@ -164,9 +165,10 @@ def test_akamai_requires_acceptance_after_ordered_sensor_pixel_flow(
                 assert caught.value.code == "solve_failed"
                 assert len([p for p in state["posts"] if p == "/sensor"]) == 4
             else:
-                cookies = await solver.solve(
+                response = await solver.solve(
                     type="akamai", url=base + "/page", user_agent=user_agent
                 )
+                cookies = response["cookies"]
                 cookie = next(c for c in cookies if c["name"] == "_abck")
                 assert cookie["value"] == "accepted~0~value~-1"
                 assert cookie["host_only"] is True and cookie["http_only"] is True
@@ -181,7 +183,7 @@ def test_named_session_rejects_identity_changes_and_uses_current_cookie_snapshot
     base, state = site
 
     async def run():
-        async with Solver("test-key", base_url=base, timeout=10) as solver:
+        async with Engine("test-key", base_url=base, timeout=10) as solver:
             await solver.solve(
                 type="akamai", url=base + "/page", user_agent=UA, session="account-1"
             )
@@ -194,7 +196,7 @@ def test_named_session_rejects_identity_changes_and_uses_current_cookie_snapshot
                 )
             assert caught.value.code == "session_conflict"
             state["require_cookie"] = "_abck=current~-1~value~-1"
-            cookies = await solver.solve(
+            response = await solver.solve(
                 type="akamai",
                 url=base + "/page",
                 session="account-1",
@@ -202,6 +204,7 @@ def test_named_session_rejects_identity_changes_and_uses_current_cookie_snapshot
                     {"name": "_abck", "value": "current~-1~value~-1", "path": "/"}
                 ],
             )
+            cookies = response["cookies"]
             assert (
                 next(c for c in cookies if c["name"] == "_abck")["value"]
                 == "accepted~0~value~-1"
@@ -260,10 +263,10 @@ def test_tmx_preserves_credential_scope_through_full_profile(site):
 
         async with serve(websocket, "127.0.0.1", 0) as listener:
             port = listener.sockets[0].getsockname()[1]
-            async with Solver(
+            async with Engine(
                 "test-key", base_url=f"http://127.0.0.1:{port}", timeout=10
             ) as solver:
-                cookies = await solver.solve(
+                response = await solver.solve(
                     type="threatmetrix",
                     url=origin + "/tmx",
                     user_agent=UA,
@@ -271,6 +274,7 @@ def test_tmx_preserves_credential_scope_through_full_profile(site):
                     cookies=[{"name": "auth", "value": "local-secret"}],
                     headers={"Authorization": "Bearer local-secret"},
                 )
+                cookies = response["cookies"]
         assert {c["name"] for c in cookies} == {"auth", "tmx"}
         included, child_request, omitted = state["target_headers"]
         assert "auth=local-secret" in included["cookie"]

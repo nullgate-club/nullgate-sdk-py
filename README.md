@@ -4,105 +4,115 @@
 
 # Nullgate Python SDK 2
 
-**Prepare protection requests. Your HTTP client sends them.**
+**Solve through your local HTTP API. Keep control of your cookies and proxy.**
 
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
-[![Products](https://img.shields.io/badge/products-Akamai%20%C2%B7%20Amazon%20%C2%B7%20PingOne%20%C2%B7%20ThreatMetrix%20%C2%B7%20Classifier-56856a)](#-what-it-does)
+[![Products](https://img.shields.io/badge/products-Akamai%20%C2%B7%20Amazon%20%C2%B7%20PingOne%20%C2%B7%20ThreatMetrix%20%C2%B7%20Classifier-56856a)](#advanced-api)
 [![Docs](https://img.shields.io/badge/docs-nullgate.club-56856a)](https://nullgate.club)
 [![Telegram bot](https://img.shields.io/badge/Telegram-%40nullgate__app-26A5E4?logo=telegram&logoColor=white)](https://t.me/nullgate_app)
 
 </div>
 
-## 🧭 What it does
+## Start
 
-The SDK talks to the Nullgate API and gives you ready request data: URLs, bodies,
-headers, and form values. In the standard SDK, you send the prepared requests with
-your own HTTP client, such as `httpx`. The optional local solver sends target requests.
-
-| Product | What you get | SDK method | Guide |
-|---|---|---|---|
-| Akamai | Sensor, pixel, and SBSD requests | `page.sensor()`, `page.pixel()`, `page.sbsd()` | [Akamai](https://nullgate.club/en/akamai) |
-| Amazon FWCIM | The `metadata1` form value | `page.fwcim()` | [Amazon](https://nullgate.club/en/amazon) |
-| Amazon ACIC | PoW and AWS WAF answers | `ng.acic_pow()`, `ng.acic_waf()` | [ACIC](https://nullgate.club/en/amazon-acic) |
-| PingOne Protect | Encoded device data | `page.protect()` | [Example](examples/pingone.py) |
-| ThreatMetrix | A full profiling session | `page.threatmetrix()` | [ThreatMetrix](https://nullgate.club/en/threatmetrix) |
-| Classifier | Image labels and text-query matches | `ng.classify()`, `ng.match()` | [Classifier](https://nullgate.club/en/classifier) |
-
-Shared topics: [sessions](https://nullgate.club/en/sessions),
-[errors](https://nullgate.club/en/errors), and [billing](https://nullgate.club/en/billing).
-
-## Local solver prototype
-
-Install the optional `solver` extra to get cookies without fetching scripts or
-posting generated payloads yourself. It uses `wreq`, your API key and your proxy.
-It supports Akamai and ThreatMetrix, without a browser or login automation.
-
-```python
-import asyncio
-from nullgate.solver import Solver
-
-async def main():
-    async with Solver() as solver:
-        cookies = await solver.solve(
-            type="akamai",
-            url="https://your-target.example/login",
-            user_agent="your browser user agent",
-            proxy="http://user:password@proxy.example:8080",
-            session="account-1",
-        )
-
-asyncio.run(main())
-```
-
-`session` is optional. Named sessions retain cookies and pin their UA, proxy and
-transport until the solver closes. Pass an updated `cookies` array when your
-HTTP client has newer cookies. Reuse the same UA and exit IP afterward.
-Each solve uses a new page document and fresh remote checkpoints.
-
-The [separate HTTP API](https://github.com/nullgate-club/http-api) provides a
-one-command local server for any programming language. See its README for Windows,
-Linux and macOS installation. The server is not part of the SDK.
-
-The prototype keeps at most 64 named sessions and runs at most four solves at once.
-TLS/HTTP2 settings are optional `transport` overrides. Browser profile selection is
-the closest supported `wreq` profile, not a guarantee of an exact TLS match for
-every UA. Low-entropy Chromium headers are modeled from the UA; supply exact hints
-through `headers` if your client needs them. No high-entropy hints are invented.
-For ThreatMetrix, pass `collector` when the site hides its profiling IDs behind a
-wrapper. Site acceptance is not guaranteed; generated API requests can incur charges.
-
-
-## 🚀 Quick start
-
-1. Get an API key in the Telegram bot [@nullgate_app](https://t.me/nullgate_app).
-2. Install the SDK from Git and set your key and target page:
+1. Get an API key from [@nullgate_app](https://t.me/nullgate_app).
+2. [Start Nullgate HTTP API](https://github.com/nullgate-club/http-api#start) once. Enter the key at its hidden prompt.
+3. Install the SDK:
 
    ```sh
    pip install git+https://github.com/nullgate-club/nullgate-sdk-py
-   export NULLGATE_API_KEY=ng_your_key
-   export TARGET_URL=https://your-target.example/login
    ```
 
-3. Prepare and send an Akamai sensor:
+4. Solve a page using your user agent and proxy:
 
    ```python
-   import os
-   import httpx
-   from nullgate import Nullgate
+   from nullgate.solver import Solver
 
-   UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36"
-   url = os.environ["TARGET_URL"]
-   with Nullgate() as ng, httpx.Client(headers={"User-Agent": UA}) as http:
-       session = ng.session(user_agent=UA)
-       html = http.get(url).text
-       page = session.page(url, html)
-       assert page.sensor_url is not None
-       sensor = page.sensor(script=http.get(page.sensor_url).text, cookies=http.cookies)
-       sensor.wait()
-       http.post(sensor.url, content=sensor.body, headers=sensor.headers)
+   UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36"
+   with Solver() as solver:
+       response = solver.solve(
+           type="akamai",
+           url="https://your-target.example/login",
+           user_agent=UA,
+           proxy="http://user:password@proxy.example:8080",
+           session="account-1",
+       )
+       cookies = response["cookies"]
    ```
 
-## 📦 Products
+The SDK calls `http://127.0.0.1:8191`. The local server fetches the page and scripts,
+completes the supported flow, and returns `cookies` and `result`.
+The key stays in the server. The HTTP client requires no optional native dependencies.
+
+| `type` | `result` |
+| --- | --- |
+| `akamai` | `{"accepted": true}` after `_abck` reaches `0` |
+| `threatmetrix` | `{"collected": true}` after profiling and pagehide |
+| `pingone` | `data`, `device_id`, `sdk_version`, `request_id` |
+| `amazon_acic` | `status: "PASS"`, final `url` and `status_code` after PoW/WAF and continuation |
+
+Import the returned cookies into your HTTP client's jar with their domain, path,
+expiry and security attributes. Use the same user agent and exit IP afterward.
+PingOne returns data for your application's request, not a login or a replacement cookie.
+See [the runnable example](examples/solve.py).
+
+### Sessions and transport
+
+`session` is optional. Without it, each call is independent. With it, the server retains
+cookies and pins the UA, proxy, headers and transport until shutdown.
+When your client receives newer cookies, pass its current cookie snapshot on the next solve.
+You may omit the pinned settings on that continuation.
+
+Pass `headers` for ordinary request headers. Optional `transport` accepts `emulation`,
+`tls_options`, `http2_options` and `headers_order`. Native option names and enum names
+follow [wreq](https://github.com/0x676e67/wreq-python).
+A JA4 hash alone cannot reconstruct a TLS handshake. Use a browser profile or its actual
+TLS/HTTP2 settings, not a guessed hash conversion.
+TLS and HTTP2 option objects replace that part of the browser preset.
+Omit them to preserve the preset, or provide the complete custom configuration.
+
+Pass `script_url` when a script is loaded indirectly. For PingOne, directly referenced
+`signals-sdk.js` and `signals-sdk-*.js` files can be discovered automatically.
+Pass `html` with the page's final `url` and current cookies to solve an already received challenge.
+For TMX, `collector` accepts `url`, `org_id` and the site's `session_id` when discovery needs help.
+Unknown or ambiguous protection fails explicitly.
+
+The server retains at most 64 named sessions and runs four solves concurrently.
+It adds no separate fee. Existing API prices apply to generated requests, and a solve can
+contain multiple paid generations. The clients do not retry solve calls automatically.
+
+### Async Python
+
+Use `from nullgate.solver.aio import Solver`, `async with Solver()` and
+`await solver.solve(...)`. The request and response fields stay the same.
+
+## Advanced API
+
+Use `Nullgate` when you want to fetch scripts and submit prepared requests yourself,
+or need FWCIM, classifier, accounts and direct generation operations.
+Set `NULLGATE_API_KEY` in this process for direct API calls.
+See the [product guides](https://nullgate.club), [sessions](https://nullgate.club/en/sessions),
+[errors](https://nullgate.club/en/errors) and [prices](https://nullgate.club/en/prices).
+
+### Akamai sensor
+
+```python
+import os
+import httpx
+from nullgate import Nullgate
+
+UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36"
+url = os.environ["TARGET_URL"]
+with Nullgate() as ng, httpx.Client(headers={"User-Agent": UA}) as http:
+    session = ng.session(user_agent=UA)
+    html = http.get(url).text
+    page = session.page(url, html)
+    assert page.sensor_url is not None
+    sensor = page.sensor(script=http.get(page.sensor_url).text, cookies=http.cookies)
+    sensor.wait()
+    http.post(sensor.url, content=sensor.body, headers=sensor.headers)
+```
+
 
 ### Akamai pixel
 

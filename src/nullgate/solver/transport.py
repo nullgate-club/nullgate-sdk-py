@@ -15,6 +15,80 @@ from .models import SolveError, http_url
 
 _BODY_LIMIT = 8 * 1024 * 1024
 
+# wreq 0.13 omits runtime Params and silently ignores unknown native options.
+_TLS_OPTIONS = frozenset(
+    {
+        "alpn_protocols",
+        "alps_protocols",
+        "alps_use_new_codepoint",
+        "session_ticket",
+        "min_tls_version",
+        "max_tls_version",
+        "pre_shared_key",
+        "enable_ech_grease",
+        "permute_extensions",
+        "grease_enabled",
+        "enable_ocsp_stapling",
+        "enable_signed_cert_timestamps",
+        "record_size_limit",
+        "psk_skip_session_ticket",
+        "key_shares",
+        "psk_dhe_ke",
+        "renegotiation",
+        "delegated_credentials",
+        "curves_list",
+        "sigalgs_list",
+        "cipher_list",
+        "preserve_tls13_cipher_list",
+        "certificate_compression_algorithms",
+        "extension_permutation",
+        "aes_hw_override",
+        "random_aes_hw_override",
+    }
+)
+_HTTP2_OPTIONS = frozenset(
+    {
+        "initial_window_size",
+        "initial_connection_window_size",
+        "initial_max_send_streams",
+        "initial_stream_id",
+        "adaptive_window",
+        "max_frame_size",
+        "max_header_list_size",
+        "header_table_size",
+        "max_concurrent_streams",
+        "keep_alive_interval",
+        "keep_alive_timeout",
+        "keep_alive_while_idle",
+        "enable_push",
+        "enable_connect_protocol",
+        "no_rfc7540_priorities",
+        "max_concurrent_reset_streams",
+        "max_send_buf_size",
+        "max_pending_accept_reset_streams",
+        "headers_stream_dependency",
+        "headers_pseudo_order",
+        "settings_order",
+        "priorities",
+    }
+)
+
+
+def _dependency(value: Any) -> http2.StreamDependency:
+    if (
+        not isinstance(value, dict)
+        or set(value) != {"dependency_id", "weight", "is_exclusive"}
+        or type(value["dependency_id"]) is not int
+        or type(value["weight"]) is not int
+        or type(value["is_exclusive"]) is not bool
+    ):
+        raise ValueError("Invalid HTTP2 stream dependency")
+    return http2.StreamDependency(
+        http2.StreamId(value["dependency_id"]),
+        value["weight"],
+        value["is_exclusive"],
+    )
+
 
 def _browser_headers(user_agent: str) -> dict[str, str]:
     headers = {"user-agent": user_agent, "accept-language": "en-US,en;q=0.9"}
@@ -95,26 +169,40 @@ def _profile(user_agent: str, name: object) -> wreq.Emulation:
 
 def _settings(options: dict[str, Any] | None, user_agent: str) -> dict[str, Any]:
     options = options or {}
-    if set(options) - {"emulation", "tls_options", "http2_options"}:
+    if set(options) - {"emulation", "tls_options", "http2_options", "headers_order"}:
         raise SolveError(
             "invalid_request",
-            "Unknown transport setting; use emulation, tls_options or http2_options",
+            "Unknown transport setting",
             stage="validate",
         )
     result: dict[str, Any] = {
         "emulation": _profile(user_agent, options.get("emulation"))
     }
-    for name, module, constructor in (
-        ("tls_options", tls, wreq.TlsOptions),
-        ("http2_options", http2, wreq.Http2Options),
+    if "headers_order" in options:
+        order = options["headers_order"]
+        if (
+            not isinstance(order, list)
+            or len(order) > 128
+            or any(
+                not isinstance(name, str)
+                or len(name) > 256
+                or re.fullmatch(r"[!#$%&'*+.^_`|~0-9A-Za-z-]+", name) is None
+                for name in order
+            )
+            or len({name.lower() for name in order}) != len(order)
+        ):
+            raise SolveError(
+                "invalid_request", "Invalid headers_order", stage="validate"
+            )
+        result["orig_headers"] = order
+    for name, fields, constructor in (
+        ("tls_options", _TLS_OPTIONS, wreq.TlsOptions),
+        ("http2_options", _HTTP2_OPTIONS, wreq.Http2Options),
     ):
         if name not in options:
             continue
         values = options[name]
-        if (
-            not isinstance(values, dict)
-            or set(values) - module.Params.__annotations__.keys()
-        ):
+        if not isinstance(values, dict) or set(values) - fields:
             raise SolveError(
                 "invalid_request", f"Unknown {name} option", stage="validate"
             )
@@ -156,14 +244,34 @@ def _settings(options: dict[str, Any] | None, user_agent: str) -> dict[str, Any]
             for key in ("keep_alive_interval", "keep_alive_timeout"):
                 if key in values:
                     values[key] = timedelta(seconds=values[key])
-            for key in ("headers_stream_dependency", "priorities"):
-                if key in values:
-                    raise ValueError("unsupported structured HTTP2 option")
+            if "headers_stream_dependency" in values:
+                values["headers_stream_dependency"] = _dependency(
+                    values["headers_stream_dependency"]
+                )
+            if "priorities" in values:
+                priorities = values["priorities"]
+                if not isinstance(priorities, list) or len(priorities) > 128:
+                    raise ValueError("Invalid HTTP2 priorities")
+                frames = []
+                for priority in priorities:
+                    if (
+                        not isinstance(priority, dict)
+                        or set(priority) != {"stream_id", "dependency"}
+                        or type(priority["stream_id"]) is not int
+                    ):
+                        raise ValueError("Invalid HTTP2 priority frame")
+                    frames.append(
+                        http2.Priority(
+                            http2.StreamId(priority["stream_id"]),
+                            _dependency(priority["dependency"]),
+                        )
+                    )
+                values["priorities"] = http2.Priorities(*frames)
             result[name] = constructor(**values)
         except (AttributeError, TypeError, ValueError, KeyError, OverflowError):
             raise SolveError(
                 "invalid_request",
-                f"Invalid {name}; use wreq enum names and JSON scalar options",
+                f"Invalid {name}; use documented JSON options and wreq enum names",
                 stage="validate",
             ) from None
     return result
@@ -205,6 +313,16 @@ class Transport:
             timeout=timedelta(seconds=30),
         )
 
+    def set_page(self, url: str) -> None:
+        http_url(url)
+        self._document = httpx.URL(url)
+        if self._origin is None:
+            self._origin = (
+                self._document.scheme,
+                self._document.host,
+                self._document.port,
+            )
+
     async def request(
         self,
         method: str,
@@ -223,8 +341,6 @@ class Transport:
             current = httpx.URL(url)
             same_origin = (current.scheme, current.host, current.port) == self._origin
             outgoing = httpx.Headers(_browser_headers(self.user_agent))
-            if same_origin:
-                outgoing.update(self._headers)
             if navigation:
                 self._document = current
             elif self._document is not None:
@@ -260,10 +376,22 @@ class Transport:
                         "sec-fetch-dest": "script",
                         "sec-fetch-mode": "no-cors",
                         "sec-fetch-site": "same-origin"
-                        if same_origin
+                        if self._document is not None
+                        and (
+                            current.scheme,
+                            current.host,
+                            current.port,
+                        )
+                        == (
+                            self._document.scheme,
+                            self._document.host,
+                            self._document.port,
+                        )
                         else "cross-site",
                     }
                 )
+            if same_origin:
+                outgoing.update(self._headers)
             outgoing.update(headers or {})
             if not same_origin or not credentials:
                 for key in ("authorization", "proxy-authorization"):

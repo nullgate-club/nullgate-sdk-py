@@ -2,8 +2,47 @@
 
 import math
 from dataclasses import dataclass, field
-from typing import Any, Literal
+from typing import Any, Literal, Required, TypedDict
 from urllib.parse import urlsplit
+
+Product = Literal["akamai", "threatmetrix", "pingone", "amazon_acic"]
+
+
+class TransportOptions(TypedDict, total=False):
+    emulation: str
+    tls_options: dict[str, Any]
+    http2_options: dict[str, Any]
+    headers_order: list[str]
+
+
+class PingOneOptions(TypedDict, total=False):
+    sdk_config: dict[str, object]
+    jwt_device_attributes: str
+    jwt_agent_payload: str
+    client_token: str
+    token_host: str
+    behavioral: dict[str, object]
+
+
+class Request(TypedDict, total=False):
+    type: Required[Product]
+    url: Required[str]
+    user_agent: str | None
+    proxy: str | None
+    session: str | None
+    cookies: list[dict[str, Any]] | None
+    transport: TransportOptions | None
+    headers: dict[str, str] | None
+    collector: dict[str, str] | None
+    script_url: str | None
+    html: str | None
+    pixel_iframe: bool
+    pingone: PingOneOptions | None
+
+
+class Result(TypedDict):
+    cookies: list[dict[str, Any]]
+    result: dict[str, Any]
 
 
 class SolveError(Exception):
@@ -51,7 +90,7 @@ def http_url(value: object) -> str:
 
 @dataclass(kw_only=True)
 class Options:
-    type: Literal["akamai", "threatmetrix"]
+    type: Product
     url: str
     user_agent: str | None = None
     proxy: str | None = field(default=None, repr=False)
@@ -62,15 +101,65 @@ class Options:
     collector: dict[str, str] | None = None
     script_url: str | None = None
     pixel_iframe: bool = False
+    html: str | None = field(default=None, repr=False)
+    pingone: dict[str, Any] | None = field(default=None, repr=False)
 
     def __post_init__(self) -> None:
-        if self.type not in {"akamai", "threatmetrix"}:
+        if self.type not in {"akamai", "threatmetrix", "pingone", "amazon_acic"}:
             raise SolveError(
                 "invalid_request",
-                "type must be akamai or threatmetrix",
+                "type must be akamai, threatmetrix, pingone or amazon_acic",
                 stage="validate",
             )
         self.url = http_url(self.url)
+        if self.html is not None and (
+            not isinstance(self.html, str)
+            or not self.html
+            or len(self.html.encode("utf-8")) > 8 * 1024 * 1024
+        ):
+            raise SolveError(
+                "invalid_request",
+                "html must be nonempty and at most 8 MiB",
+                stage="validate",
+            )
+        if self.pingone is not None:
+            allowed = {
+                "sdk_config",
+                "jwt_device_attributes",
+                "jwt_agent_payload",
+                "client_token",
+                "token_host",
+                "behavioral",
+            }
+            if (
+                self.type != "pingone"
+                or not isinstance(self.pingone, dict)
+                or set(self.pingone) - allowed
+                or any(
+                    not isinstance(value, dict)
+                    if key in {"sdk_config", "behavioral"}
+                    else not isinstance(value, str) or not value
+                    for key, value in self.pingone.items()
+                )
+            ):
+                raise SolveError(
+                    "invalid_request",
+                    "Invalid PingOne options",
+                    stage="validate",
+                )
+        if (
+            self.collector is not None
+            and self.type != "threatmetrix"
+            or self.pixel_iframe
+            and self.type != "akamai"
+            or self.script_url is not None
+            and self.type == "amazon_acic"
+        ):
+            raise SolveError(
+                "invalid_request",
+                "Options belong to a different product",
+                stage="validate",
+            )
         if self.script_url is not None:
             self.script_url = http_url(self.script_url)
         if self.user_agent is not None and (

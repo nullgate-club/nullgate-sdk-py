@@ -5,7 +5,11 @@ from .models import SolveError
 from .transport import Transport
 
 
-async def load(session: Session, transport: Transport, url: str) -> tuple[Page, str]:
+async def load(
+    session: Session, transport: Transport, url: str, *, html: str | None = None
+) -> tuple[Page, str]:
+    if html is not None:
+        return session.page(url, html), url
     response = await transport.request("GET", url, navigation=True)
     if not (200 <= response.status_code < 300 or response.status_code == 403):
         raise SolveError("target_error", "Target page request failed", stage="page")

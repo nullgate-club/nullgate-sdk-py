@@ -1,21 +1,21 @@
-"""Solve a page with your own API key, user agent, and optional proxy."""
+"""Start nullgate-http-api, then set TARGET_URL and USER_AGENT."""
 
-import asyncio
 import os
 
 from nullgate.solver import Solver
 
 
-async def main() -> None:
-    async with Solver() as solver:
-        cookies = await solver.solve(
+def main() -> None:
+    with Solver() as solver:
+        response = solver.solve(
             type="akamai",
             url=os.environ["TARGET_URL"],
             user_agent=os.environ["USER_AGENT"],
             proxy=os.environ.get("TARGET_PROXY"),
+            session="account-1",
         )
-        print(cookies)
+        print(response["cookies"])
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()

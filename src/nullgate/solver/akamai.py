@@ -1,4 +1,4 @@
-"""Target-side Akamai and ThreatMetrix solve flows."""
+"""Complete Akamai sensor, pixel and SBSD flows."""
 
 from urllib.parse import unquote, urljoin, urlsplit
 
@@ -56,12 +56,13 @@ async def solve(
     transport: Transport,
     url: str,
     *,
+    html: str | None = None,
     script_url: str | None = None,
     pixel_iframe: bool = False,
-) -> None:
+) -> dict[str, object]:
     stage = "page"
     try:
-        page, page_url = await document.load(session, transport, url)
+        page, page_url = await document.load(session, transport, url, html=html)
         sbsd_url = page.sbsd_url
         if sbsd_url is not None:
             stage = "script"
@@ -92,7 +93,7 @@ async def solve(
         responses = 0
         generation = abck_counters(cookie)[1]
         if _accepted(cookie):
-            return
+            return {"accepted": True}
         for index in range(4):
             if is_enough(cookie, response_count=responses):
                 break
@@ -118,7 +119,7 @@ async def solve(
                 responses = 0
                 generation = next_generation
             if _accepted(cookie):
-                return
+                return {"accepted": True}
         raise SolveError(
             "solve_failed", "Akamai cookie was not accepted", stage="target"
         )

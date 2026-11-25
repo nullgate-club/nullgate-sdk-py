@@ -14,12 +14,13 @@ async def solve(
     transport: Transport,
     url: str,
     *,
+    html: str | None = None,
     script_url: str | None = None,
     collector: Mapping[str, str] | None = None,
-) -> None:
+) -> dict[str, object]:
     stage = "page"
     try:
-        page, _ = await document.load(session, transport, url)
+        page, _ = await document.load(session, transport, url, html=html)
         stage = "profile"
         async with page.threatmetrix(
             send=transport.send,
@@ -27,7 +28,9 @@ async def solve(
             script_url=script_url,
             collector=collector,
         ) as profile:
+            await profile.wait_collected()
             await profile.pagehide()
+        return {"collected": True}
     except NullgateError as exc:
         raise SolveError(
             exc.code,

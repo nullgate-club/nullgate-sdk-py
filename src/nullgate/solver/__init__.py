@@ -1,6 +1,21 @@
-"""Local solve helpers."""
+"""Simple clients for the local Nullgate HTTP API."""
 
-from .engine import Solver
-from .models import SolveError
+from .client import Solver
+from .models import (
+    PingOneOptions,
+    Product,
+    Request,
+    Result,
+    SolveError,
+    TransportOptions,
+)
 
-__all__ = ["SolveError", "Solver"]
+__all__ = [
+    "PingOneOptions",
+    "Product",
+    "Request",
+    "Result",
+    "SolveError",
+    "Solver",
+    "TransportOptions",
+]
