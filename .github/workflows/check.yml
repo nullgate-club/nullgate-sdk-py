@@ -29,3 +29,18 @@ jobs:
       - run: make build
         env:
           PYTHON: ${{ matrix.python }}
+
+  solver:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@v10.3.2
+        with:
+          python-version: "3.11"
+      - run: uv sync --locked --python 3.11 --all-extras --group dev
+      - run: uv run --locked --python 3.11 --all-extras pytest tests/test_solver.py

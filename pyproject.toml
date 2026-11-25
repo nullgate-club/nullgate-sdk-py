@@ -34,6 +34,9 @@ Documentation = "https://docs.nullgate.club"
 Repository = "https://github.com/nullgate-club/nullgate-sdk-py"
 Issues = "https://github.com/nullgate-club/nullgate-sdk-py/issues"
 
+[project.optional-dependencies]
+solver = ["wreq==0.13.0"]
+
 [dependency-groups]
 dev = [
     "ruff>=0.14",

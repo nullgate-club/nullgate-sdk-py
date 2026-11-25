@@ -16,8 +16,8 @@
 ## 🧭 What it does
 
 The SDK talks to the Nullgate API and gives you ready request data: URLs, bodies,
-headers, and form values. It never sends anything to the target site. You send the
-prepared requests with your own HTTP client, such as `httpx`.
+headers, and form values. In the standard SDK, you send the prepared requests with
+your own HTTP client, such as `httpx`. The optional local solver sends target requests.
 
 | Product | What you get | SDK method | Guide |
 |---|---|---|---|
@@ -30,6 +30,47 @@ prepared requests with your own HTTP client, such as `httpx`.
 
 Shared topics: [sessions](https://nullgate.club/en/sessions),
 [errors](https://nullgate.club/en/errors), and [billing](https://nullgate.club/en/billing).
+
+## Local solver prototype
+
+Install the optional `solver` extra to get cookies without fetching scripts or
+posting generated payloads yourself. It uses `wreq`, your API key and your proxy.
+It supports Akamai and ThreatMetrix, without a browser or login automation.
+
+```python
+import asyncio
+from nullgate.solver import Solver
+
+async def main():
+    async with Solver() as solver:
+        cookies = await solver.solve(
+            type="akamai",
+            url="https://your-target.example/login",
+            user_agent="your browser user agent",
+            proxy="http://user:password@proxy.example:8080",
+            session="account-1",
+        )
+
+asyncio.run(main())
+```
+
+`session` is optional. Named sessions retain cookies and pin their UA, proxy and
+transport until the solver closes. Pass an updated `cookies` array when your
+HTTP client has newer cookies. Reuse the same UA and exit IP afterward.
+Each solve uses a new page document and fresh remote checkpoints.
+
+The [separate HTTP API](https://github.com/nullgate-club/http-api) provides a
+one-command local server for any programming language. See its README for Windows,
+Linux and macOS installation. The server is not part of the SDK.
+
+The prototype keeps at most 64 named sessions and runs at most four solves at once.
+TLS/HTTP2 settings are optional `transport` overrides. Browser profile selection is
+the closest supported `wreq` profile, not a guarantee of an exact TLS match for
+every UA. Low-entropy Chromium headers are modeled from the UA; supply exact hints
+through `headers` if your client needs them. No high-entropy hints are invented.
+For ThreatMetrix, pass `collector` when the site hides its profiling IDs behind a
+wrapper. Site acceptance is not guaranteed; generated API requests can incur charges.
+
 
 ## 🚀 Quick start
 
