@@ -3,6 +3,7 @@
 import re
 from collections.abc import Mapping
 from datetime import timedelta
+from http.cookiejar import DefaultCookiePolicy
 from typing import Any
 
 import httpx
@@ -17,7 +18,7 @@ _BODY_LIMIT = 8 * 1024 * 1024
 
 def _browser_headers(user_agent: str) -> dict[str, str]:
     headers = {"user-agent": user_agent, "accept-language": "en-US,en;q=0.9"}
-    chrome = re.search(r"(?:Chrome|CriOS)/(\d+)", user_agent)
+    chrome = re.search(r"Chrome/(\d+)", user_agent)
     if chrome:
         major = chrome[1]
         brand = "Microsoft Edge" if "Edg/" in user_agent else "Google Chrome"
@@ -68,10 +69,14 @@ def _profile(user_agent: str, name: object) -> wreq.Emulation:
             if match:
                 family, version = prefix, int(match[1])
                 break
+        if platform == emulation.Platform.IOS:
+            family = "SafariIPad" if "iPad" in user_agent else "SafariIos"
+            if os_version := re.search(r"OS (\d+)", user_agent):
+                version = int(os_version[1])
         candidates = [
             (int(m[1]), key)
             for key in dir(emulation.Profile)
-            if (m := re.fullmatch(family + r"(\d+)", key))
+            if (m := re.fullmatch(family + r"(\d+)(?:_\d+)*", key, re.IGNORECASE))
         ]
         if not candidates:
             raise SolveError(
@@ -182,6 +187,12 @@ class Transport:
             ) from None
         self.user_agent = user_agent
         self.cookies = httpx.Cookies()
+        self.cookies.jar.set_policy(
+            DefaultCookiePolicy(
+                strict_ns_domain=DefaultCookiePolicy.DomainStrictNonDomain,
+                strict_domain=True,
+            )
+        )
         self._headers = dict(headers or {})
         self._origin: tuple[str, str, int | None] | None = None
         self._document: httpx.URL | None = None

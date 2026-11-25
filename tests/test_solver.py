@@ -130,8 +130,27 @@ def site():
         thread.join()
 
 
-@pytest.mark.parametrize("accepted", [True, False])
-def test_akamai_requires_acceptance_after_ordered_sensor_pixel_flow(site, accepted):
+@pytest.mark.parametrize(
+    ("accepted", "user_agent"),
+    [
+        (True, UA),
+        (False, UA),
+        (
+            True,
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+            "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.2 Safari/605.1.15",
+        ),
+        (
+            True,
+            "Mozilla/5.0 (iPhone; CPU iPhone OS 26_2 like Mac OS X) "
+            "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.2 "
+            "Mobile/15E148 Safari/604.1",
+        ),
+    ],
+)
+def test_akamai_requires_acceptance_after_ordered_sensor_pixel_flow(
+    site, accepted, user_agent
+):
     base, state = site
     state["accept"] = accepted
 
@@ -139,12 +158,14 @@ def test_akamai_requires_acceptance_after_ordered_sensor_pixel_flow(site, accept
         async with Solver("test-key", base_url=base, timeout=10) as solver:
             if not accepted:
                 with pytest.raises(SolveError) as caught:
-                    await solver.solve(type="akamai", url=base + "/page", user_agent=UA)
+                    await solver.solve(
+                        type="akamai", url=base + "/page", user_agent=user_agent
+                    )
                 assert caught.value.code == "solve_failed"
                 assert len([p for p in state["posts"] if p == "/sensor"]) == 4
             else:
                 cookies = await solver.solve(
-                    type="akamai", url=base + "/page", user_agent=UA
+                    type="akamai", url=base + "/page", user_agent=user_agent
                 )
                 cookie = next(c for c in cookies if c["name"] == "_abck")
                 assert cookie["value"] == "accepted~0~value~-1"
@@ -189,8 +210,10 @@ def test_named_session_rejects_identity_changes_and_uses_current_cookie_snapshot
     asyncio.run(run())
 
 
-def test_tmx_completes_profile_without_sending_or_storing_omitted_credentials(site):
+def test_tmx_preserves_credential_scope_through_full_profile(site):
     base, state = site
+    origin = "http://parent.example.test"
+    child = "http://child.parent.example.test"
 
     async def run():
         async def websocket(socket):
@@ -205,7 +228,8 @@ def test_tmx_completes_profile_without_sending_or_storing_omitted_credentials(si
                     }
                 )
             )
-            for index, omit in enumerate((False, True), 1):
+            targets = ((origin, False), (child, False), (origin, True))
+            for index, (target, omit) in enumerate(targets, 1):
                 await socket.send(
                     json.dumps(
                         {
@@ -213,7 +237,7 @@ def test_tmx_completes_profile_without_sending_or_storing_omitted_credentials(si
                             "id": index,
                             "request": {
                                 "role": "collector",
-                                "url": base + "/collector",
+                                "url": target + "/collector",
                                 "method": "GET",
                                 "headers": {"X-Omit": "yes" if omit else "no"},
                                 "body": None,
@@ -241,14 +265,16 @@ def test_tmx_completes_profile_without_sending_or_storing_omitted_credentials(si
             ) as solver:
                 cookies = await solver.solve(
                     type="threatmetrix",
-                    url=base + "/tmx",
+                    url=origin + "/tmx",
                     user_agent=UA,
+                    proxy=base,
                     cookies=[{"name": "auth", "value": "local-secret"}],
                     headers={"Authorization": "Bearer local-secret"},
                 )
         assert {c["name"] for c in cookies} == {"auth", "tmx"}
-        included, omitted = state["target_headers"]
+        included, child_request, omitted = state["target_headers"]
         assert "auth=local-secret" in included["cookie"]
+        assert not any(k.lower() in {"cookie", "authorization"} for k in child_request)
         assert not any(k.lower() in {"cookie", "authorization"} for k in omitted)
 
     asyncio.run(run())
