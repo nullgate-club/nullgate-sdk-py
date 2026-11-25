@@ -39,7 +39,29 @@ def test_headers_order_controls_actual_http1_wire_order(site):
         transport = Transport(
             "test-agent",
             None,
-            {"headers_order": ["x-third", "x-first", "x-second"]},
+            {
+                "headers_order": ["x-third", "x-first", "x-second"],
+                "tls_options": {"min_tls_version": "TLS_1_2"},
+                "http2_options": {
+                    "initial_window_size": 1048576,
+                    "headers_pseudo_order": ["METHOD", "AUTHORITY", "SCHEME", "PATH"],
+                    "headers_stream_dependency": {
+                        "dependency_id": 0,
+                        "weight": 255,
+                        "is_exclusive": True,
+                    },
+                    "priorities": [
+                        {
+                            "stream_id": 3,
+                            "dependency": {
+                                "dependency_id": 0,
+                                "weight": 200,
+                                "is_exclusive": False,
+                            },
+                        }
+                    ],
+                },
+            },
             {"x-first": "1", "x-second": "2", "x-third": "3"},
         )
         try:
@@ -99,3 +121,11 @@ def test_page_context_does_not_leak_or_rebind_default_auth(site):
     assert "authorization" not in second
     assert second["sec-fetch-site"] == "same-origin"
     assert third["authorization"] == "secret"
+
+
+@pytest.mark.parametrize("setting", ["tls_options", "http2_options"])
+def test_native_options_reject_unknown_names_instead_of_ignoring_them(setting):
+    with pytest.raises(SolveError) as caught:
+        Transport("test-agent", None, {setting: {"not_a_real_option": True}})
+    assert caught.value.code == "invalid_request"
+    assert caught.value.stage == "validate"
